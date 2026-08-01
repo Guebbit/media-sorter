@@ -1,0 +1,17 @@
+.env
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/models/
+data/ultralytics/
+output/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.idea/
+.pytest_cache/
+data/rules.json
+data/settings.json
+requirements.lock.txt
+.claude

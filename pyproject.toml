@@ -1,0 +1,29 @@
+[project]
+name = "photosort"
+version = "0.1.0"
+description = "Offline photo indexer and sorter: scan, YOLO, rules, Ollama, symlinks."
+requires-python = ">=3.11"
+readme = "README.md"
+# torch and torchvision are absent on purpose: they come from a variant-specific
+# index (see the Makefile), not from PyPI's resolution of this list.
+dependencies = [
+    "ultralytics>=8.3,<9",
+    "pillow>=11,<13",
+    "pillow-heif>=0.20,<2",
+    "requests>=2.32,<3",
+    "typer>=0.15,<1",
+    "rich>=13.9,<16",
+]
+
+[project.scripts]
+photosort = "photosort.interfaces.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["photosort*"]
+
+[tool.setuptools.package-data]
+"photosort.interfaces.web" = ["static/*.html"]

@@ -1,0 +1,106 @@
+"""Shared fixtures.
+
+Everything here builds a throwaway library + index under tmp_path, so the tests
+never touch a real photo folder and can run in any order. `ctx` is the same
+composition root the front ends use, which is what lets a test drive a use case
+exactly the way the CLI does.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import pytest
+from PIL import Image
+
+from photosort.config import Settings, load_settings, overrides
+from photosort.domain.detection import Detection
+from photosort.domain.rules import RuleSet
+from photosort.services import AppContext
+from photosort.storage import Storage
+
+
+def make_image(path: Path, size: tuple[int, int] = (64, 48), color: tuple[int, int, int] = (10, 20, 30)) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", size, color).save(path)
+    return path
+
+
+def detection(cls: str, confidence: float) -> Detection:
+    return Detection(cls, confidence, 0.0, 0.0, 10.0, 10.0)
+
+
+@pytest.fixture
+def library_root(tmp_path: Path) -> Path:
+    """A small photo library: 5 images, one nested, plus files that must be ignored.
+
+    Named for the folder rather than "library" so it cannot be confused with the
+    `services.library` module in tests that use both.
+    """
+    root = tmp_path / "photos"
+    for index, name in enumerate(["a.jpg", "b.jpg", "sub/c.png", "sub/d.jpeg", "e.webp"]):
+        make_image(root / name, color=(index * 20, 50, 90))
+    (root / "notes.txt").write_text("not an image")
+    make_image(root / ".hidden" / "skip.jpg")
+    return root
+
+
+@pytest.fixture
+def env(tmp_path: Path, library_root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    """Configuration pointing at the temporary library.
+
+    The folders go through the overlay rather than the environment, because the
+    environment is not a layer for those two keys — so a test configures them the
+    same way `photosort config set` and the Settings tab do.
+    """
+    values = {
+        # Both layers that would otherwise reach outside tmp_path: the project's
+        # own .env (tests run from the repo root) and the UI's settings overlay.
+        # An explicit path that does not exist means "no such layer".
+        "PHOTOSORT_ENV_FILE": str(tmp_path / "absent.env"),
+        "PHOTOSORT_SETTINGS": str(tmp_path / "data" / "settings.json"),
+        "PHOTOSORT_DB": str(tmp_path / "data" / "photosort.db"),
+        "PHOTOSORT_MODELS_DIR": str(tmp_path / "data" / "models"),
+        "PHOTOSORT_RULES": str(tmp_path / "data" / "rules.json"),
+        "PHOTOSORT_STARTER_CLASSES": "cat,dog",
+        "PHOTOSORT_LOG_LEVEL": "CRITICAL",
+        "PHOTOSORT_ANALYZE_ENABLED": "0",
+        "PHOTOSORT_ADJUDICATE_ENABLED": "0",
+        "PHOTOSORT_WORKERS_SCAN": "2",
+        "PHOTOSORT_WORKERS_ANALYZE": "2",
+    }
+    # Clear anything inherited from the developer's shell so tests are hermetic.
+    for key in list(os.environ):
+        if key.startswith("PHOTOSORT_"):
+            monkeypatch.delenv(key, raising=False)
+    for key, value in values.items():
+        monkeypatch.setenv(key, value)
+
+    overrides.save(Path(values["PHOTOSORT_SETTINGS"]), {
+        "INPUT_FOLDERS": [str(library_root)],
+        "OUTPUT_FOLDER": str(tmp_path / "output"),
+    })
+    return values
+
+
+@pytest.fixture
+def settings(env: dict[str, str]) -> Settings:
+    return load_settings()
+
+
+@pytest.fixture
+def ctx(settings: Settings) -> AppContext:
+    """The wired application, exactly as a front end would build it."""
+    return AppContext.create(settings)
+
+
+@pytest.fixture
+def storage(ctx: AppContext) -> Storage:
+    return ctx.storage
+
+
+@pytest.fixture
+def ruleset() -> RuleSet:
+    """The default cat/dog ruleset — the behaviour from the original spec."""
+    return RuleSet.starter(["cat", "dog"])

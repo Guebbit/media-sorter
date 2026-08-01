@@ -1,0 +1,12 @@
+# Ranges rather than exact pins. `make freeze` records what you actually have,
+# if you want a reproducible set.
+#
+# torch and torchvision are deliberately absent: they come from a variant-
+# specific index (CUDA or CPU) and `make install` installs them first, before
+# ultralytics gets a chance to pull a different build over the top.
+ultralytics>=8.3,<9
+pillow>=11,<13
+pillow-heif>=0.20,<2
+requests>=2.32,<3
+typer>=0.15,<1
+rich>=13.9,<16
