@@ -25,12 +25,8 @@ def _effective(ctx: AppContext) -> dict[str, Any]:
     return {
         "INPUT_FOLDERS": [str(folder) for folder in settings.library.input_folders],
         "OUTPUT_FOLDER": str(settings.output.folder),
-        "DETECT_CONFIDENCE": settings.detect.confidence,
-        "REVIEW_CONFIDENCE": settings.detect.review_confidence,
         "OLLAMA_URL": settings.analyze.url,
         "OLLAMA_MODEL": settings.analyze.model,
-        "ADJUDICATE_ENABLED": settings.analyze.adjudicate,
-        "ANALYZE_ENABLED": settings.analyze.enabled,
     }
 
 

@@ -80,45 +80,12 @@ EDITABLE: tuple[Editable, ...] = (
         from_environment=False,
     ),
     Editable(
-        "DETECT_CONFIDENCE", "Confidence (YOLO)", "number",
-        "At or above this score, a detection satisfies a rule condition.",
-        from_environment=False,
-    ),
-    Editable(
-        "REVIEW_CONFIDENCE", "AI Review (Ollama)", "number",
-        "Between this and Confidence, a detection is kept and flagged for review — "
-        "the band Ollama's second opinion is asked about.",
-        from_environment=False,
-    ),
-    Editable(
         "OLLAMA_URL", "Ollama URL", "url",
         "The Ollama you already run. Nothing is started for you.",
     ),
     Editable(
         "OLLAMA_MODEL", "Vision model", "text",
         "Any vision-capable model installed in that Ollama.",
-    ),
-    Editable(
-        "ADJUDICATE_ENABLED", "Second opinion on uncertain photos", "bool",
-        "When the detector is unsure — it half-saw something, between the review "
-        "and decision thresholds — ask the vision model whether the subject is "
-        "really there. A confirmed photo is sorted as a normal match, a rejected "
-        "one stops being flagged, and one the model cannot settle either goes to "
-        "the review folder for you to look at. It runs only on the uncertain "
-        "photos, which is a small fraction of a library, so it costs far less "
-        "than the semantic pass below. Off means an uncertain photo goes straight "
-        "to review, which is what this tool did before.",
-    ),
-    Editable(
-        "ANALYZE_ENABLED", "Semantic pass (describe photos with Ollama)", "bool",
-        "A second, optional look at each photo. The detector only finds objects — "
-        "'there is a cat, here'. This asks a vision model to describe what it sees: "
-        "breed, how many, indoors or out, what they are doing. It is what makes "
-        "`photosort search \"maine coon\"` work. Your rules never depend on it, so "
-        "turning it off changes nothing about which photos get sorted where — it is "
-        "just extra searchable detail. It runs only on photos the rules did not "
-        "ignore, and it is slow: seconds per photo against dozens per second for "
-        "detection. Off is the right choice for a first pass over a big library.",
     ),
 )
 

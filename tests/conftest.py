@@ -18,7 +18,7 @@ from photosort.config import Settings, load_settings, overrides
 from photosort.domain.detection import Detection
 from photosort.domain.rules import RuleSet
 from photosort.services import AppContext
-from photosort.storage import Storage
+from photosort.storage import RulesStore, Storage
 
 
 def make_image(path: Path, size: tuple[int, int] = (64, 48), color: tuple[int, int, int] = (10, 20, 30)) -> Path:
@@ -63,10 +63,7 @@ def env(tmp_path: Path, library_root: Path, monkeypatch: pytest.MonkeyPatch) -> 
         "PHOTOSORT_DB": str(tmp_path / "data" / "photosort.db"),
         "PHOTOSORT_MODELS_DIR": str(tmp_path / "data" / "models"),
         "PHOTOSORT_RULES": str(tmp_path / "data" / "rules.json"),
-        "PHOTOSORT_STARTER_CLASSES": "cat,dog",
         "PHOTOSORT_LOG_LEVEL": "CRITICAL",
-        "PHOTOSORT_ANALYZE_ENABLED": "0",
-        "PHOTOSORT_ADJUDICATE_ENABLED": "0",
         "PHOTOSORT_WORKERS_SCAN": "2",
         "PHOTOSORT_WORKERS_ANALYZE": "2",
     }
@@ -81,6 +78,10 @@ def env(tmp_path: Path, library_root: Path, monkeypatch: pytest.MonkeyPatch) -> 
         "INPUT_FOLDERS": [str(library_root)],
         "OUTPUT_FOLDER": str(tmp_path / "output"),
     })
+    # Nothing seeds the rules file at runtime any more (that's `rules init`'s
+    # job) — write the default cat/dog set directly so every other test can
+    # assume one exists, exactly as the CLI would leave it.
+    RulesStore(Path(values["PHOTOSORT_RULES"])).save(RuleSet.starter(["cat", "dog"]))
     return values
 
 

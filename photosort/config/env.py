@@ -160,20 +160,15 @@ def _build_detect(layers: _Layers, models_dir: Path) -> DetectSettings:
     return DetectSettings(
         model=layers.str_("DETECT_MODEL", "yolo11m.pt"),
         model_search_paths=(models_dir, *layers.paths_("MODEL_SEARCH_PATHS", "")),
-        confidence=layers.float_("DETECT_CONFIDENCE", 0.65),
-        review_confidence=layers.float_("REVIEW_CONFIDENCE", 0.35),
         batch=max(1, layers.int_("DETECT_BATCH", 16)),
         imgsz=layers.int_("DETECT_IMGSZ", 640),
         device_name=layers.str_("DETECT_DEVICE", "auto"),
-        starter_classes=tuple(c.lower() for c in layers.list_("STARTER_CLASSES", "cat,dog,video")),
     )
 
 
 def _build_analyze(layers: _Layers) -> AnalyzeSettings:
     """The Ollama vision engine's settings: where it is, which model, timeouts."""
     return AnalyzeSettings(
-        enabled=layers.bool_("ANALYZE_ENABLED", True),
-        adjudicate=layers.bool_("ADJUDICATE_ENABLED", True),
         url=layers.str_("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/"),
         model=layers.str_("OLLAMA_MODEL", "llava-llama3"),
         timeout=layers.int_("OLLAMA_TIMEOUT", 180),

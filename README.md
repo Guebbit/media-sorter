@@ -29,6 +29,11 @@ thing resumable: kill it at any point, run the same command again, and it picks
 up exactly where it stopped. Nothing is processed twice unless the file itself
 changed.
 
+For a longer explanation of *why* it works this way — YOLO, the second
+opinion, the rules engine — see [docs/CONCEPTS.md](docs/CONCEPTS.md). For a
+tour of the code itself, module by module, see
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Requirements
 
 Python 3.11+, and an Ollama you already run (only for the optional semantic
@@ -41,6 +46,7 @@ make install          # creates .venv, downloads torch (~2.5 GB) — once
 source .venv/bin/activate
 
 photosort config set --input ~/Pictures   # the one thing it cannot guess
+photosort rules init --classes cat,dog,video   # nothing else seeds this for you
 photosort doctor      # check GPU, weights, Ollama, rules, paths
 photosort run         # scan -> detect -> analyze -> apply the rules
 ```
@@ -154,22 +160,23 @@ web UI) is the only thing standing between a rule and your originals. `move`
 and `delete` rules are always available; `delete` always goes to the trash
 folder, never a permanent unlink. Preview first.
 
-`.env.example` is deliberately short: it contains exactly the six settings
+`.env.example` is deliberately short: it contains exactly the three settings
 below and nothing else, and every one of them works as shipped.
 
 | Variable                        | Default                  | What it does                                             |
 | ------------------------------- | ------------------------ | -------------------------------------------------------- |
-| `PHOTOSORT_ADJUDICATE_ENABLED`  | `1`                      | Second opinion on uncertain detections. Also in the UI.  |
-| `PHOTOSORT_ANALYZE_ENABLED`     | `1`                      | `0` runs detection only — much faster. Also in the UI.   |
 | `PHOTOSORT_OLLAMA_URL`          | `http://127.0.0.1:11434` | Your Ollama. Also in the UI.                             |
 | `PHOTOSORT_OLLAMA_MODEL`        | `llava-llama3`           | Vision model for both Ollama passes. Also in the UI.     |
-| `PHOTOSORT_STARTER_CLASSES`     | `cat,dog,video`          | Seeds the *first* rules file only; rules take over.      |
 | `PHOTOSORT_DETECT_MODEL`        | `yolo11m.pt`             | `yolo11n` (fast) … `yolo11x` (accurate).                 |
 
-The detector confidence band has no `.env` variable at all — set it with
-`photosort config set --confidence 0.65 --review-confidence 0.35`, or the
-"Confidence (YOLO)" / "AI Review (Ollama)" fields in the Settings tab, both of
-which already default to those values.
+The semantic pass always runs — there is no on/off switch for it any more, in
+the UI or in `.env`. The confidence band and the second opinion are per rule
+now, not global settings: each class condition in a rule (`{"class": "cat", ...}`)
+carries its own `min_confidence` (auto-pass threshold), `min_review_confidence`
+(the floor of the band below it), and `ollama_review` (whether a borderline hit
+of that class is worth asking Ollama about at all) — set them in the rule
+editor's "conf ≥" / "review ≥" / AI review controls, or directly in
+`rules.json`. Left unset, a condition falls back to 0.65 / 0.35 / on.
 
 The rest — the state paths, the worker counts, the detector's batch size and image
 size, Ollama's timeout and context window, the review folder, the web host and
@@ -220,8 +227,9 @@ A rule has a **name**, a **condition** and an **action**. They are evaluated top
 to bottom and **the first match wins**, so the most specific rule goes first and
 the last one should match anything.
 
-The file lives at `PHOTOSORT_RULES` (`./data/rules.json`) and is created on first run from
-`PHOTOSORT_STARTER_CLASSES` — one combined rule, one per class, one catch-all:
+The file lives at `PHOTOSORT_RULES` (`./data/rules.json`). Nothing creates it for
+you — run `photosort rules init --classes cat,dog,video` once, which writes one
+combined rule, one per class, one catch-all:
 
 ```jsonc
 {
@@ -273,15 +281,22 @@ A richer example — note that none of this required a code change:
 
 **Conditions**
 
-| Form                                            | Meaning                                     |
-| ----------------------------------------------- | ------------------------------------------- |
-| `"cat"` or `{"class": "cat"}`                    | at least one cat above the global threshold |
-| `{"class": "cat", "min_count": 2}`               | at least two                                |
-| `{"class": "cat", "min_confidence": 0.4}`        | this rule uses its own threshold            |
-| `{"all_of": [...]}` / `{"any_of": [...]}`        | AND / OR                                    |
-| `{"none_of": [...]}` / `{"not": {...}}`          | NOR / NOT                                   |
-| `{"any_detection": true, "min_count": 3}`        | three or more detections of any class       |
-| `{"always": true}`                               | catch-all                                   |
+| Form                                                            | Meaning                                       |
+| ---------------------------------------------------------------- | ---------------------------------------------- |
+| `"cat"` or `{"class": "cat"}`                                    | at least one cat above the default threshold  |
+| `{"class": "cat", "min_count": 2}`                               | at least two                                  |
+| `{"class": "cat", "min_confidence": 0.4}`                        | this class uses its own auto-pass threshold   |
+| `{"class": "cat", "min_review_confidence": 0.2}`                 | ...and its own review-band floor              |
+| `{"class": "cat", "ollama_review": false}`                       | never ask Ollama about a borderline cat        |
+| `{"all_of": [...]}` / `{"any_of": [...]}`                        | AND / OR                                      |
+| `{"none_of": [...]}` / `{"not": {...}}`                          | NOR / NOT                                     |
+| `{"any_detection": true, "min_count": 3}`                        | three or more detections of any class         |
+| `{"always": true}`                                               | catch-all                                     |
+
+`min_confidence`, `min_review_confidence` and `ollama_review` default to 0.65,
+0.35 and `true` when a condition leaves them unset. When the same class appears
+in more than one rule, the first rule (in priority order) that mentions it
+wins whichever of these it set explicitly.
 
 **Actions** — see [The four actions](#the-four-actions).
 
@@ -489,15 +504,17 @@ an unplugged drive never destroys work.
 
 **Detector.** One model instance doing batched inference, fed by a thread pool that
 decodes the next batch while the GPU works on the current one. Detections are
-stored down to `REVIEW_CONFIDENCE`, not `CONFIDENCE` — the extra rows are what
-make the review flag and later threshold changes possible without re-running
-the model.
+stored down to the lowest `min_review_confidence` any rule's class band asks
+for, not the (possibly higher) `min_confidence` that band auto-passes at — the
+extra rows are what make the review flag and later threshold changes possible
+without re-running the model.
 
 **Second opinion.** The detector is cheap and sure of itself; the vision model
 is slow and can actually look. So the expensive one is asked exactly one
-question, about exactly the images the cheap one could not answer: a detection
-between `REVIEW_CONFIDENCE` and `CONFIDENCE` — the same band that raises
-`needs_review` — is put to Ollama as *is this really there?*
+question, about exactly the images the cheap one could not answer: a class
+whose band turns `ollama_review` on, and whose detection falls between that
+class's `min_review_confidence` and `min_confidence` — the same band that
+raises `needs_review` — is put to Ollama as *is this really there?*
 
 The answer is `present`, `absent` or `unsure`, and **`unsure` is a real answer**:
 the prompt says so, and a reply that cannot be parsed is read as `unsure` too.
@@ -525,9 +542,9 @@ order. Escalation is therefore paid for once: edit your rules afterwards and the
 verdicts are reused, not re-asked.
 
 The queue is the review flag itself, which keeps the two honestly in sync —
-there is no second definition of "uncertain" to drift. Turn the stage off
-(`PHOTOSORT_ADJUDICATE_ENABLED=0`), or have Ollama unreachable, and an uncertain
-photo goes straight to `_Review`: exactly what the tool did before this existed.
+there is no second definition of "uncertain" to drift. Turn `ollama_review` off
+for a class, or have Ollama unreachable, and an uncertain photo of that class
+goes straight to `_Review`: exactly what the tool did before this existed.
 
 **Rules engine.** Pure logic, zero AI (`domain/`). Conditions are
 a composable tree — a new operator is a new `Condition` subclass plus one

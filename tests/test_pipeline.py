@@ -182,7 +182,7 @@ def test_analyze_never_sees_a_video(indexed, cats):
 
     engine = FakeVision()
     stats = run_analyze_stage(
-        indexed.storage, indexed.settings.analyze, indexed.settings.detect,
+        indexed.storage, indexed.settings.analyze, ruleset,
         indexed.settings.workers, lambda: engine, Stopper(),
     )
     assert stats.processed == 5
@@ -205,7 +205,7 @@ def test_analysis_only_sees_images_the_rules_kept(indexed, cats):
 
     engine = FakeVision()
     stats = run_analyze_stage(
-        indexed.storage, indexed.settings.analyze, indexed.settings.detect,
+        indexed.storage, indexed.settings.analyze, cats,
         indexed.settings.workers, lambda: engine, Stopper(),
     )
     assert stats.processed == 2
@@ -216,7 +216,7 @@ def test_the_detector_result_is_passed_to_the_vision_engine_as_a_hint(indexed, c
     _detect_all(indexed, cats)
     engine = FakeVision()
     run_analyze_stage(
-        indexed.storage, indexed.settings.analyze, indexed.settings.detect,
+        indexed.storage, indexed.settings.analyze, cats,
         indexed.settings.workers, lambda: engine, Stopper(),
     )
     assert all(hint == "cat (95%)" for _, hint in engine.seen)
@@ -225,7 +225,7 @@ def test_the_detector_result_is_passed_to_the_vision_engine_as_a_hint(indexed, c
 def test_a_refusing_engine_records_an_error_per_image(indexed, cats):
     _detect_all(indexed, cats)
     stats = run_analyze_stage(
-        indexed.storage, indexed.settings.analyze, indexed.settings.detect,
+        indexed.storage, indexed.settings.analyze, cats,
         indexed.settings.workers, lambda: FakeVision(fail_on={".jpg", ".png", ".jpeg", ".webp"}),
         Stopper(),
     )
@@ -301,7 +301,7 @@ def test_a_confident_detection_is_never_escalated(indexed, cats):
 
     engine = FakeAdjudicator()
     stats = run_adjudicate_stage(
-        indexed.storage, indexed.settings.detect, cats, indexed.settings.workers,
+        indexed.storage, cats, indexed.settings.workers,
         lambda: engine, Stopper(),
     )
     assert stats.processed == 0
@@ -321,7 +321,7 @@ def test_a_confirmed_verdict_promotes_the_photo_out_of_the_catch_all(indexed, ca
 
     engine = FakeAdjudicator(PRESENT)
     stats = run_adjudicate_stage(
-        indexed.storage, indexed.settings.detect, cats, indexed.settings.workers,
+        indexed.storage, cats, indexed.settings.workers,
         lambda: engine, Stopper(),
     )
     assert stats.processed == 5
@@ -338,7 +338,7 @@ def test_a_rejected_verdict_clears_the_review_flag(indexed, cats):
     assert indexed.storage.images.count("needs_review = 1") == 5
 
     run_adjudicate_stage(
-        indexed.storage, indexed.settings.detect, cats, indexed.settings.workers,
+        indexed.storage, cats, indexed.settings.workers,
         lambda: FakeAdjudicator(ABSENT), Stopper(),
     )
     assert indexed.storage.images.count("needs_review = 1") == 0
@@ -349,7 +349,7 @@ def test_an_unsure_verdict_leaves_the_photo_for_a_human(indexed, cats):
     """`unsure` is the answer the review folder exists for."""
     _detect_as(indexed, cats, MAYBE_CAT)
     run_adjudicate_stage(
-        indexed.storage, indexed.settings.detect, cats, indexed.settings.workers,
+        indexed.storage, cats, indexed.settings.workers,
         lambda: FakeAdjudicator(UNSURE), Stopper(),
     )
     assert indexed.storage.images.count("needs_review = 1") == 5
@@ -361,7 +361,7 @@ def test_a_failed_verdict_leaves_the_photo_exactly_as_it_was(indexed, cats):
     must not lose the review flag that sends the photo to a person."""
     _detect_as(indexed, cats, MAYBE_CAT)
     stats = run_adjudicate_stage(
-        indexed.storage, indexed.settings.detect, cats, indexed.settings.workers,
+        indexed.storage, cats, indexed.settings.workers,
         lambda: FakeAdjudicator(fail_on={".jpg", ".png", ".jpeg", ".webp"}), Stopper(),
     )
     assert stats.errors == 5
@@ -378,7 +378,7 @@ def test_the_semantic_pass_waits_for_a_verdict_before_writing_a_photo_off(indexe
     assert indexed.storage.images.count("analyze_state = ?", (SKIPPED,)) == 0
 
     run_adjudicate_stage(
-        indexed.storage, indexed.settings.detect, cats, indexed.settings.workers,
+        indexed.storage, cats, indexed.settings.workers,
         lambda: FakeAdjudicator(PRESENT), Stopper(),
     )
     # Promoted to `link`, so it is now a candidate for description rather than skipped.
@@ -391,7 +391,7 @@ def test_a_verdict_survives_a_rule_edit(indexed, cats):
 
     _detect_as(indexed, cats, MAYBE_CAT)
     run_adjudicate_stage(
-        indexed.storage, indexed.settings.detect, cats, indexed.settings.workers,
+        indexed.storage, cats, indexed.settings.workers,
         lambda: FakeAdjudicator(PRESENT), Stopper(),
     )
     outcome = processing.recheck(indexed, cats)

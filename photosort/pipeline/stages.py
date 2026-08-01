@@ -16,13 +16,18 @@ from ..config import AnalyzeSettings, DetectSettings, WorkerSettings
 from ..domain.adjudication import Adjudication, adjudicated, uncertain_classes
 from ..domain.decision import decide
 from ..domain.detection import VIDEO_CLASS, VIDEO_MODEL, Detection, is_video
-from ..domain.rules import RuleSet
+from ..domain.rules import (ClassBand, DEFAULT_CONFIDENCE, DEFAULT_OLLAMA_REVIEW,
+                            DEFAULT_REVIEW_CONFIDENCE, RuleSet)
 from ..errors import EngineError
 from ..storage import ImageRow, Stage, Storage
 from .ports import AdjudicatorEngine, DetectorEngine, VisionEngine
 from .stopper import Stopper
 
 log = logging.getLogger(__name__)
+
+#: What a class with no band at all gets — one no rule mentions, but whose
+#: detections still landed in storage.
+_DEFAULT_BAND = ClassBand(DEFAULT_CONFIDENCE, DEFAULT_REVIEW_CONFIDENCE, DEFAULT_OLLAMA_REVIEW)
 
 #: stage name, how many more are done, how many are left
 ProgressFn = Callable[[str, int, int], None]
@@ -88,7 +93,10 @@ def run_detect_stage(storage: Storage, settings: DetectSettings, ruleset: RuleSe
 
     def _finish(row: ImageRow, detections: list[Detection], model: str,
                 skip_analyze: bool = False) -> None:
-        decision = decide(detections, ruleset, settings.confidence, settings.review_confidence)
+        """Score `row` against `ruleset`, persist the decision, and fold it
+        into `stats` — the one place both the video shortcut and the real
+        detector path land."""
+        decision = decide(detections, ruleset)
         storage.results.finish_detect(row.id, detections, decision, model, skip_analyze)
         stats.processed += 1
         stats.bump(decision.category)
@@ -149,7 +157,7 @@ def run_detect_stage(storage: Storage, settings: DetectSettings, ruleset: RuleSe
     return stats
 
 
-def run_adjudicate_stage(storage: Storage, detect: DetectSettings, ruleset: RuleSet,
+def run_adjudicate_stage(storage: Storage, ruleset: RuleSet,
                          workers: WorkerSettings,
                          engine_factory: Callable[[], AdjudicatorEngine], stopper: Stopper,
                          on_progress: ProgressFn | None = None, limit: int | None = None,
@@ -173,7 +181,7 @@ def run_adjudicate_stage(storage: Storage, detect: DetectSettings, ruleset: Rule
         engine, and return `(image_id, verdicts, error)` for the caller to
         record — run inside the thread pool, so it must not touch shared state."""
         detections = storage.detections.objects_for_image(row.id)
-        classes = uncertain_classes(detections, detect.confidence, detect.review_confidence)
+        classes = uncertain_classes(detections, ruleset)
         if not classes:
             # The flag outlived what raised it — a rule edit, a threshold change.
             # Nothing to ask, and nothing to record.
@@ -216,9 +224,9 @@ def run_adjudicate_stage(storage: Storage, detect: DetectSettings, ruleset: Rule
                     adjudicated(
                         storage.detections.objects_for_image(image_id),
                         verdicts or [],
-                        detect.confidence,
+                        ruleset,
                     ),
-                    ruleset, detect.confidence, detect.review_confidence,
+                    ruleset,
                 )
                 storage.results.finish_adjudicate(
                     image_id, verdicts or [], decision, engine.model
@@ -236,7 +244,7 @@ def run_adjudicate_stage(storage: Storage, detect: DetectSettings, ruleset: Rule
     return stats
 
 
-def run_analyze_stage(storage: Storage, settings: AnalyzeSettings, detect: DetectSettings,
+def run_analyze_stage(storage: Storage, settings: AnalyzeSettings, ruleset: RuleSet,
                       workers: WorkerSettings, engine_factory: Callable[[], VisionEngine],
                       stopper: Stopper, on_progress: ProgressFn | None = None,
                       limit: int | None = None, wait_for_detect: bool = False) -> StageStats:
@@ -256,7 +264,7 @@ def run_analyze_stage(storage: Storage, settings: AnalyzeSettings, detect: Detec
         """One image's worth of work: describe it and persist the result,
         returning `(image_id, error)` for the caller — run inside the thread
         pool, so it must not touch shared state."""
-        hint = _detection_hint(storage, row.id, detect.confidence)
+        hint = _detection_hint(storage, row.id, ruleset)
         try:
             # The one call into Ollama for this image — `engine` is a
             # `VisionEngine` (in practice an `analyzing.OllamaClient` asked
@@ -296,11 +304,12 @@ def run_analyze_stage(storage: Storage, settings: AnalyzeSettings, detect: Detec
     return stats
 
 
-def _detection_hint(storage: Storage, image_id: int, confidence: float) -> str | None:
+def _detection_hint(storage: Storage, image_id: int, ruleset: RuleSet) -> str | None:
     """What the detector already knows, phrased for a prompt."""
+    bands = ruleset.class_bands()
     hint = ", ".join(
         f"{d['class']} ({d['confidence']:.0%})"
         for d in storage.detections.for_image(image_id)
-        if d["confidence"] >= confidence
+        if d["confidence"] >= bands.get(d["class"], _DEFAULT_BAND).confidence
     )
     return hint or None

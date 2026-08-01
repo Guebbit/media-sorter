@@ -78,15 +78,13 @@ def adjudicate(
     front of a person.
     """
     ctx = setup(verbose)
-    if not ctx.settings.analyze.adjudicate:
-        console.print("[yellow]the second opinion is disabled — nothing to do[/yellow]")
-        return
     ruleset = load_rules(ctx)
+    if not ruleset.needs_adjudication():
+        console.print("[yellow]no rule asks for a second opinion — nothing to do[/yellow]")
+        return
     console.print(
         f"[dim]engine:[/dim] {ctx.settings.analyze.url}  "
-        f"[dim]model:[/dim] {ctx.settings.analyze.model}  "
-        f"[dim]band:[/dim] {ctx.settings.detect.review_confidence}"
-        f"–{ctx.settings.detect.confidence}"
+        f"[dim]model:[/dim] {ctx.settings.analyze.model}"
     )
 
     ctx.storage.images.sync_adjudication_queue()
@@ -108,9 +106,6 @@ def analyze(
 ):
     """Run the semantic pass on images the rules did not ignore."""
     ctx = setup(verbose)
-    if not ctx.settings.analyze.enabled:
-        console.print("[yellow]the semantic pass is disabled — nothing to do[/yellow]")
-        return
     ruleset = load_rules(ctx)
     console.print(
         f"[dim]engine:[/dim] {ctx.settings.analyze.url}  "
@@ -156,13 +151,13 @@ def run(
         render.scan_summary(stats)
 
     counts = ctx.storage.reporting.pending_counts()
-    with_analyze = ctx.settings.analyze.enabled and not no_analyze
+    with_analyze = not no_analyze
 
     with progress() as bar:
         tasks = {Stage.DETECT.value: bar.add_task("detect", total=counts["detect_pending"])}
         # Both downstream totals grow as the detector finds things; seed them
         # with what we already know and correct them as the stages report.
-        if ctx.settings.analyze.adjudicate:
+        if ruleset.needs_adjudication():
             tasks[Stage.ADJUDICATE.value] = bar.add_task(
                 "adjudicate", total=counts["adjudicate_pending"] or None)
         if with_analyze:

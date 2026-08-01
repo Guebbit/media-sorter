@@ -36,25 +36,12 @@ def set_(
     ),
     ollama_url: str = typer.Option(None, "--ollama-url", metavar="URL"),
     ollama_model: str = typer.Option(None, "--ollama-model", metavar="NAME"),
-    confidence: float = typer.Option(
-        None, "--confidence", metavar="0-1",
-        help="Score a detection needs to satisfy a rule condition.",
-    ),
-    review_confidence: float = typer.Option(
-        None, "--review-confidence", metavar="0-1",
-        help="Below --confidence but at or above this, a detection is flagged for review.",
-    ),
-    analyze: bool = typer.Option(
-        None, "--analyze/--no-analyze", help="Run the semantic pass at all.",
-    ),
-    adjudicate: bool = typer.Option(
-        None, "--adjudicate/--no-adjudicate",
-        help="Ask the vision model about detections the detector was unsure of.",
-    ),
 ):
     """Save settings for every later command, and for the web UI.
 
     Writes the same overlay the Settings tab writes, which wins over `.env`.
+    Confidence thresholds and the Ollama review toggle are set per rule
+    condition now — see `photosort rules` / the web UI's rule editor.
     """
     ctx = setup()
     values = {
@@ -62,16 +49,11 @@ def set_(
         "OUTPUT_FOLDER": output_folder,
         "OLLAMA_URL": ollama_url,
         "OLLAMA_MODEL": ollama_model,
-        "DETECT_CONFIDENCE": confidence,
-        "REVIEW_CONFIDENCE": review_confidence,
-        "ANALYZE_ENABLED": analyze,
-        "ADJUDICATE_ENABLED": adjudicate,
     }
     given = {key: value for key, value in values.items() if value not in (None, [], ())}
     if not given:
         fail("nothing to set — pass at least one of --input, --output, "
-             "--ollama-url, --ollama-model, --confidence, --review-confidence, "
-             "--analyze/--no-analyze, --adjudicate/--no-adjudicate")
+             "--ollama-url, --ollama-model")
 
     run_or_fail(lambda: configuring.update(ctx, given))
 

@@ -117,11 +117,9 @@ def test_a_url_must_look_like_one(tmp_path):
 def test_values_are_stored_as_the_environment_would_hold_them(tmp_path, library_root):
     stored = overrides.save(tmp_path / "settings.json", {
         "INPUT_FOLDERS": [str(library_root), str(tmp_path)],
-        "ANALYZE_ENABLED": False,
         "OLLAMA_URL": "http://box:11434/",
     })
     assert stored["INPUT_FOLDERS"] == f"{library_root},{tmp_path}"
-    assert stored["ANALYZE_ENABLED"] == "0"
     assert stored["OLLAMA_URL"] == "http://box:11434"
 
 
@@ -178,7 +176,6 @@ def test_source_is_reported_per_key(env, monkeypatch):
     assert source_of("OLLAMA_MODEL") == "settings"
     assert source_of("OLLAMA_URL") == "environment"
     assert source_of("OUTPUT_FOLDER") == "settings"  # the fixture saves it
-    assert source_of("ANALYZE_ENABLED") == "environment"
 
 
 def test_a_folder_is_never_reported_as_coming_from_the_environment(env, monkeypatch):

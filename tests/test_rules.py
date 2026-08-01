@@ -7,9 +7,10 @@ import json
 import pytest
 
 from photosort.actions.registry import default_registry
-from photosort.domain.rules import (AllOf, Always, AnyDetection, AnyOf, HasClass, MatchContext,
-                                    NoneOf, Not, Rule, RuleError, RuleSet, parse_condition,
-                                    reorder)
+from photosort.domain.rules import (AllOf, Always, AnyDetection, AnyOf, ClassBand,
+                                    DEFAULT_CONFIDENCE, DEFAULT_OLLAMA_REVIEW,
+                                    DEFAULT_REVIEW_CONFIDENCE, HasClass, MatchContext, NoneOf,
+                                    Not, Rule, RuleError, RuleSet, parse_condition, reorder)
 from photosort.storage import RulesStore
 from tests.conftest import detection
 
@@ -87,10 +88,22 @@ def test_condition_round_trips_through_json():
     assert parse_condition(node).to_json() == node
 
 
+def test_review_band_and_ollama_toggle_round_trip_through_json():
+    node = {"class": "cat", "min_confidence": 0.8, "min_review_confidence": 0.6,
+            "ollama_review": False}
+    condition = parse_condition(node)
+    assert condition.min_review_confidence == 0.6
+    assert condition.ollama_review is False
+    assert condition.to_json() == node
+
+
 @pytest.mark.parametrize("node, message", [
     ({"class": ""}, "non-empty string"),
     ({"class": "cat", "min_count": 0}, "min_count"),
     ({"class": "cat", "min_confidence": 5}, "min_confidence"),
+    ({"class": "cat", "min_review_confidence": 5}, "min_review_confidence"),
+    ({"class": "cat", "min_confidence": 0.3, "min_review_confidence": 0.5}, "min_review_confidence"),
+    ({"class": "cat", "ollama_review": "yes"}, "ollama_review"),
     ({"all_of": "cat"}, "must be a list"),
     ({"nonsense": 1}, "unknown condition"),
     (42, "must be an object"),
@@ -124,6 +137,61 @@ def test_disabled_rules_are_skipped():
         Rule("on", HasClass("cat")),
     ))
     assert ruleset.evaluate(ctx(("cat", 0.9))).name == "on"
+
+
+# ------------------------------------------------------------- class bands
+
+
+def test_an_unmentioned_field_falls_back_to_the_hardcoded_default():
+    ruleset = RuleSet((Rule("cat", HasClass("cat")),))
+    assert ruleset.class_bands()["cat"] == ClassBand(
+        DEFAULT_CONFIDENCE, DEFAULT_REVIEW_CONFIDENCE, DEFAULT_OLLAMA_REVIEW
+    )
+
+
+def test_an_uncustomised_mention_does_not_shadow_a_later_rules_override():
+    """A rule that references a class without overriding anything (`cat`
+    inside an `all_of` with `dog`, say) must not win that class's band just
+    because it comes first in priority order — only an explicit value should
+    ever claim a field. Regression for a bug where the whole band tuple was
+    claimed on first sight, silently discarding a later rule's override."""
+    ruleset = RuleSet((
+        Rule("cat-dog", AllOf([HasClass("cat"), HasClass("dog")])),
+        Rule("cat", HasClass("cat", min_confidence=0.2)),
+    ))
+    assert ruleset.class_bands()["cat"].confidence == 0.2
+
+
+def test_each_field_resolves_independently_from_whichever_rule_set_it():
+    """Not merely "first rule wins" — first rule to set *that field* wins,
+    so two different rules can each contribute one half of a class's band."""
+    ruleset = RuleSet((
+        Rule("a", HasClass("cat", min_confidence=0.8)),
+        Rule("b", HasClass("cat", min_review_confidence=0.5, ollama_review=False)),
+    ))
+    band = ruleset.class_bands()["cat"]
+    assert band == ClassBand(confidence=0.8, review_confidence=0.5, ollama_review=False)
+
+
+def test_needs_adjudication_is_true_when_any_class_opts_in():
+    assert not RuleSet(
+        (Rule("cat", HasClass("cat", ollama_review=False)),)
+    ).needs_adjudication()
+    assert RuleSet((Rule("cat", HasClass("cat")),)).needs_adjudication()  # default is on
+    assert RuleSet((
+        Rule("cat", HasClass("cat", ollama_review=False)),
+        Rule("dog", HasClass("dog", ollama_review=True)),
+    )).needs_adjudication()
+
+
+def test_validate_rejects_a_band_left_inverted_by_its_defaults():
+    """`min_confidence` alone, set low enough to fall under the default
+    `min_review_confidence`, produces an inverted band once defaults fill the
+    other field in — validation must catch that, not just the case where both
+    are set explicitly on the same condition."""
+    ruleset = RuleSet((Rule("cat", HasClass("cat", min_confidence=0.2)),))
+    with pytest.raises(RuleError, match="review confidence"):
+        ruleset.validate(default_registry().names())
 
 
 def test_target_folder_defaults_to_a_title_cased_name():
@@ -234,24 +302,23 @@ def test_a_ruleset_that_asks_for_nothing_is_an_error():
 # ------------------------------------------------------- the store, not the rules
 
 
-def test_store_seeds_then_reuses(settings):
-    store = RulesStore(settings.paths.rules)
-    created = store.load_or_seed(["cat", "dog"])
+def test_store_load_after_save_round_trips(tmp_path):
+    store = RulesStore(tmp_path / "rules.json")
+    assert not store.exists()
+    store.save(RuleSet.starter(["cat", "dog"]))
     assert store.exists()
-    assert created.names() == ["cat-dog", "cat", "dog", "none", "in-doubt"]
+    assert store.load().names() == ["cat-dog", "cat", "dog", "none", "in-doubt"]
 
-    # A later edit must be honoured rather than overwritten.
+    # A later edit must be honoured rather than overwritten by anything else.
     store.path.write_text(json.dumps({"rules": [{"name": "only", "when": {"class": "cat"}}]}))
-    assert store.load_or_seed(["cat", "dog"]).names() == ["only", "in-doubt"]
+    assert store.load().names() == ["only", "in-doubt"]
 
 
-def test_store_validates_when_asked(settings):
-    store = RulesStore(settings.paths.rules)
-    store.path.parent.mkdir(parents=True, exist_ok=True)
-    store.path.write_text(json.dumps(
-        {"rules": [{"name": "x", "when": {"class": "cat"}, "action": "teleport"}]}))
+def test_rule_validate_rejects_unknown_action():
+    ruleset = RuleSet.from_json(
+        {"rules": [{"name": "x", "when": {"class": "cat"}, "action": "teleport"}]})
     with pytest.raises(RuleError, match="unknown action"):
-        store.load_or_seed(["cat"], validate_with=default_registry().names())
+        ruleset.validate(default_registry().names())
 
 
 def test_save_is_atomic_and_leaves_no_temp_file(tmp_path):

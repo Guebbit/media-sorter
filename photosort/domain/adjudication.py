@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 from .detection import Detection
+from .rules import (ClassBand, DEFAULT_CONFIDENCE, DEFAULT_OLLAMA_REVIEW,
+                    DEFAULT_REVIEW_CONFIDENCE, RuleSet)
 
 #: The three answers a second opinion may give. `UNSURE` is a real answer, not a
 #: failure: an image nobody can settle is precisely the one worth a human.
@@ -22,6 +24,10 @@ PRESENT = "present"
 ABSENT = "absent"
 UNSURE = "unsure"
 VERDICTS = (PRESENT, ABSENT, UNSURE)
+
+#: What a class with no band at all gets — one a rule no longer mentions
+#: (deleted since the detection was made), but the row still carries.
+_DEFAULT_BAND = ClassBand(DEFAULT_CONFIDENCE, DEFAULT_REVIEW_CONFIDENCE, DEFAULT_OLLAMA_REVIEW)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,23 +55,31 @@ class Adjudication:
         return cls(cls=row["class"], verdict=row["verdict"], confidence=row["confidence"])
 
 
-def uncertain_classes(detections: Sequence[Detection], confidence: float,
-                      review_confidence: float) -> list[str]:
-    """The classes worth escalating: seen in the review band, never above it.
+def uncertain_classes(detections: Sequence[Detection], ruleset: RuleSet) -> list[str]:
+    """The classes worth escalating: seen in the review band, never above it,
+    and banded for a second opinion at all.
 
-    The same set `decide` uses to raise `needs_review`, which is deliberate — the
-    second opinion is asked about exactly the images that would otherwise have
-    gone straight to a human, and about nothing else.
+    A class whose band turns `ollama_review` off stays out of this list even
+    while borderline — it still raises `needs_review` in `decide`, which reads
+    the band the same way but does not care about the toggle, so it is left
+    flagged for a person instead of a second opinion.
     """
-    confident = {d.cls for d in detections if d.confidence >= confidence}
+    bands = ruleset.class_bands()
+
+    def band(cls: str) -> ClassBand:
+        return bands.get(cls, _DEFAULT_BAND)
+
+    confident = {d.cls for d in detections if d.confidence >= band(d.cls).confidence}
     borderline = {
-        d.cls for d in detections if review_confidence <= d.confidence < confidence
+        d.cls for d in detections
+        if band(d.cls).review_confidence <= d.confidence < band(d.cls).confidence
+        and band(d.cls).ollama_review
     }
     return sorted(borderline - confident)
 
 
 def adjudicated(detections: Sequence[Detection], adjudications: Iterable[Adjudication],
-                confidence: float) -> tuple[Detection, ...]:
+                ruleset: RuleSet) -> tuple[Detection, ...]:
     """`detections` as the second opinion leaves them.
 
     * `present` promotes that class's best borderline box to the decision
@@ -85,13 +99,19 @@ def adjudicated(detections: Sequence[Detection], adjudications: Iterable[Adjudic
     if not by_class:
         return tuple(detections)
 
+    bands = ruleset.class_bands()
+
+    def band(cls: str) -> ClassBand:
+        return bands.get(cls, _DEFAULT_BAND)
+
     kept: list[Detection] = []
     promoted: set[str] = set()
     # Highest confidence first, so "the best borderline box" is simply the first
     # one of its class we meet.
     for detection in sorted(detections, key=lambda d: d.confidence, reverse=True):
         verdict = by_class.get(detection.cls)
-        if verdict is None or detection.confidence >= confidence:
+        threshold = band(detection.cls).confidence
+        if verdict is None or detection.confidence >= threshold:
             kept.append(detection)
             continue
         if verdict.verdict == ABSENT:
@@ -104,7 +124,7 @@ def adjudicated(detections: Sequence[Detection], adjudications: Iterable[Adjudic
                 # `min_confidence` can still respond to a very sure second look.
                 Detection(
                     cls=detection.cls,
-                    confidence=max(confidence, verdict.confidence),
+                    confidence=max(threshold, verdict.confidence),
                     x1=detection.x1, y1=detection.y1, x2=detection.x2, y2=detection.y2,
                 )
             )

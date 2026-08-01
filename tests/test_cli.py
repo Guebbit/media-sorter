@@ -132,11 +132,11 @@ def test_stats(env, indexed):
     assert "pipeline" in result.output
 
 
-def test_rules_show_seeds_the_file(env, settings):
+def test_rules_show_without_a_file_names_init(env, settings):
+    settings.paths.rules.unlink()
     result = invoke("rules", "show")
-    assert result.exit_code == 0
-    assert "cat-dog" in result.output
-    assert settings.paths.rules.exists()
+    assert result.exit_code == 2
+    assert "rules init" in result.output
 
 
 def test_rules_init_with_custom_classes(env, settings):
@@ -146,9 +146,14 @@ def test_rules_init_with_custom_classes(env, settings):
     assert names == ["bird-horse", "bird", "horse", "none", "in-doubt"]
 
 
+def test_rules_init_requires_classes(env, settings):
+    result = invoke("rules", "init", "--force")
+    assert result.exit_code == 1
+    assert "no classes given" in result.output
+
+
 def test_rules_init_refuses_to_clobber(env, settings):
-    invoke("rules", "init", "--force")
-    result = invoke("rules", "init")
+    result = invoke("rules", "init", "--classes", "cat,dog")
     assert result.exit_code == 1
     assert "already exists" in result.output
 

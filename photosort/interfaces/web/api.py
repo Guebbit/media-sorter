@@ -76,6 +76,16 @@ class WebApi:
         except PhotosortError:
             return []
 
+    def needs_adjudication(self) -> bool:
+        """Whether any rule's class band asks for a second opinion at all —
+        the replacement for the old global `ADJUDICATE_ENABLED`, read from the
+        ruleset instead of settings. False when the ruleset cannot be read,
+        same reasoning as `looking_for`."""
+        try:
+            return self.load_rules().needs_adjudication()
+        except PhotosortError:
+            return False
+
     def get_meta(self) -> dict[str, Any]:
         """Everything the rules editor's page needs on load: offered classes,
         the action catalog, the doubt-rule slot, and a snapshot of settings
@@ -100,13 +110,13 @@ class WebApi:
                 # Same idea, for Ollama: said once here rather than once per
                 # photo in a log the UI is not watching.
                 "ollama_problem": diagnostics.ollama_problem(self.ctx),
-                "confidence": settings.detect.confidence,
-                "review_confidence": settings.detect.review_confidence,
                 "model": settings.detect.model,
                 "ollama_url": settings.analyze.url,
                 "ollama_model": settings.analyze.model,
-                "analyze_enabled": settings.analyze.enabled,
-                "adjudicate_enabled": settings.analyze.adjudicate,
+                # Per-rule now (each class condition sets its own band in the
+                # editor), so the one thing left worth saying up front is
+                # whether *anything* currently asks for a second opinion.
+                "adjudication_needed": self.needs_adjudication(),
             },
         }
 

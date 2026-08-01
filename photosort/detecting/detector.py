@@ -82,8 +82,16 @@ def _resolve_class_ids(model_name: str, names: dict[int, str], classes: Iterable
 class Detector:
     """Wraps one loaded model. Built per stage run, closed when the stage ends."""
 
-    def __init__(self, settings: DetectSettings, classes: Iterable[str], decode_workers: int = 4):
+    def __init__(self, settings: DetectSettings, classes: Iterable[str], conf_floor: float,
+                decode_workers: int = 4):
         """Load one YOLO model and prepare it to detect only `classes`.
+
+        `conf_floor` is the lowest `review_confidence` any class in the active
+        ruleset asks for — the most permissive floor, so nothing any rule's
+        band needs gets filtered out by YOLO before it ever reaches the
+        decision layer. It used to be the single global `REVIEW_CONFIDENCE`;
+        now that bands are per-class, the caller (`services.processing`)
+        computes it from `RuleSet.class_bands()`.
 
         This is the one place `ultralytics.YOLO(...)` is instantiated: it reads
         the weights file at `self.model_path` into (typically) GPU memory, which
@@ -97,6 +105,7 @@ class Detector:
         from ultralytics import YOLO  # lazy: heavy, and most commands never need it
 
         self.settings = settings
+        self.conf_floor = conf_floor
         self.model_path = resolve_model(settings.model, settings.model_search_paths)
         log.info("loading YOLO weights: %s", self.model_path)
         self.model = YOLO(self.model_path)
@@ -150,7 +159,7 @@ class Detector:
         predictions = self.model.predict(
             [array for _, array in usable],
             # Keep borderline hits: the review flag is computed from them.
-            conf=self.settings.review_confidence,
+            conf=self.conf_floor,
             classes=self.class_ids,
             imgsz=self.settings.imgsz,
             device=self.settings.device,

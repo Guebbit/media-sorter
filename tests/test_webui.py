@@ -27,7 +27,7 @@ def app(ctx):
 # --------------------------------------------------------------------- rules
 
 
-def test_rules_are_seeded_on_first_read(app, settings):
+def test_get_rules_returns_the_active_ruleset(app, settings):
     payload = app.get_rules()
     assert [r["name"] for r in payload["rules"]] == ["cat-dog", "cat", "dog", "none", "in-doubt"]
     assert settings.paths.rules.exists()
@@ -80,12 +80,13 @@ def test_meta_exposes_actions_and_config(app, monkeypatch):
     assert "cat" in meta["classes"]
     # Offered even though no model looks for it — a rule matches it by extension.
     assert "video" in meta["classes"]
-    # Neither job is on in the test environment, so there is nothing to say.
-    assert meta["config"]["ollama_problem"] is None
+    # The starter ruleset leaves every class band unset, which resolves to
+    # `ollama_review=True` by default — so the fixture ruleset does ask for a
+    # second opinion, unlike the old global `ADJUDICATE_ENABLED=0` test default.
+    assert meta["config"]["adjudication_needed"] is True
 
 
 def test_meta_reports_an_unreachable_ollama_when_a_job_needs_it(app, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_ADJUDICATE_ENABLED", "1")
     monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", "http://127.0.0.1:1")
     app._reload()
     assert app.get_meta()["config"]["ollama_problem"]
@@ -96,7 +97,6 @@ def test_meta_is_quiet_about_ollama_when_it_is_reachable(app, monkeypatch):
 
     server = FakeOllama()
     try:
-        monkeypatch.setenv("PHOTOSORT_ADJUDICATE_ENABLED", "1")
         monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", server.url)
         app._reload()
         assert app.get_meta()["config"]["ollama_problem"] is None
@@ -235,7 +235,6 @@ def test_settings_report_their_value_and_layer(app, library_root):
     assert fields["INPUT_FOLDERS"]["value"] == [str(library_root)]
     # Saved, never "from .env" — the environment is not a layer for a folder.
     assert fields["INPUT_FOLDERS"]["source"] == "settings"
-    assert fields["ANALYZE_ENABLED"]["value"] is False
     assert fields["OLLAMA_MODEL"]["kind"] == "text"
 
 

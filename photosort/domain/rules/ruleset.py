@@ -12,8 +12,9 @@ from typing import Any, Iterable, Sequence
 
 from ...errors import RuleError
 from ..detection import VIDEO_CLASS
-from .conditions import (AllOf, Always, Condition, HasClass, InDoubt, MatchContext,
-                         parse_condition)
+from .conditions import (AllOf, Always, ClassBand, Condition, DEFAULT_CONFIDENCE,
+                         DEFAULT_OLLAMA_REVIEW, DEFAULT_REVIEW_CONFIDENCE, HasClass, InDoubt,
+                         MatchContext, parse_condition)
 
 RULES_VERSION = 1
 
@@ -164,6 +165,49 @@ class RuleSet:
         """Every rule's name, in priority order."""
         return [rule.name for rule in self.rules]
 
+    def class_bands(self) -> dict[str, ClassBand]:
+        """Every mentioned class's resolved confidence policy.
+
+        Resolved one *field* at a time, not one whole tuple at a time: the
+        first rule (in priority order) to set a given field for a class wins
+        that field, independently of the other two. A rule that mentions a
+        class without overriding anything (say, `cat` inside an `all_of` with
+        `dog`) must not shadow a stricter `min_confidence` some later rule
+        sets for that same class — if the whole tuple were claimed on first
+        sight, the earlier, uncustomised mention would silently win and the
+        later rule's override would never be seen. Anything no rule sets at
+        all falls back to the hardcoded default rather than a global setting.
+        """
+        confidences: dict[str, float] = {}
+        reviews: dict[str, float] = {}
+        ollama_reviews: dict[str, bool] = {}
+        classes: set[str] = set()
+        for rule in self.rules:
+            if rule.name == DOUBT_RULE_NAME:
+                continue
+            for cls, (confidence, review_confidence, ollama_review) in rule.condition.class_bands().items():
+                classes.add(cls)
+                if confidence is not None:
+                    confidences.setdefault(cls, confidence)
+                if review_confidence is not None:
+                    reviews.setdefault(cls, review_confidence)
+                if ollama_review is not None:
+                    ollama_reviews.setdefault(cls, ollama_review)
+        return {
+            cls: ClassBand(
+                confidence=confidences.get(cls, DEFAULT_CONFIDENCE),
+                review_confidence=reviews.get(cls, DEFAULT_REVIEW_CONFIDENCE),
+                ollama_review=ollama_reviews.get(cls, DEFAULT_OLLAMA_REVIEW),
+            )
+            for cls in classes
+        }
+
+    def needs_adjudication(self) -> bool:
+        """Whether any class in this ruleset is banded for a second opinion at
+        all. The replacement for the old global `ADJUDICATE_ENABLED`: instead
+        of one settings flag, it is true the moment any rule opts a class in."""
+        return any(band.ollama_review for band in self.class_bands().values())
+
     # ---------------------------------------------------------- serialisation
 
     def to_json(self) -> dict[str, Any]:
@@ -213,6 +257,17 @@ class RuleSet:
             if unknown:
                 raise RuleError(
                     f"rules reference classes the detector cannot find: {sorted(unknown)}"
+                )
+        # A condition validates its own two fields in isolation, but leaving
+        # only one of them set can still produce an inverted band once the
+        # other falls back to its default — e.g. `min_confidence: 0.2` alone
+        # pairs with the default `min_review_confidence` of 0.35.
+        for cls, band in self.class_bands().items():
+            if band.review_confidence > band.confidence:
+                raise RuleError(
+                    f"class {cls!r} has a review confidence ({band.review_confidence}) "
+                    f"above its confidence ({band.confidence}) once defaults are applied; "
+                    "set both explicitly on the same condition"
                 )
 
     # ---------------------------------------------------------------- default

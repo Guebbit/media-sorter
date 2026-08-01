@@ -61,53 +61,39 @@ class LibrarySettings:
 
 @dataclass(frozen=True, slots=True)
 class DetectSettings:
-    """The object detector, and the two thresholds the whole tool hangs on."""
+    """The object detector: weights, batching, device.
+
+    The confidence thresholds used to live here as two global settings; they
+    are now per rule condition (`domain.rules.conditions.HasClass`), resolved
+    through `RuleSet.class_bands()` — see `domain.rules.conditions` for the
+    hardcoded fallback a condition gets when it does not set its own.
+    """
 
     model: str
     #: Directories searched for weights before falling back to a download.
     #: A deployment that ships weights inside its image adds them here.
     model_search_paths: tuple[Path, ...]
-    #: At or above this, a detection satisfies a rule condition.
-    confidence: float
-    #: Between this and `confidence`, a detection is kept and flagged for review.
-    review_confidence: float
     batch: int
     imgsz: int
     device_name: str
-    #: Only used to seed the rules file on first run. From then on the rules are
-    #: the single source of truth for what the detector looks for.
-    starter_classes: tuple[str, ...]
 
     @property
     def device(self) -> str | None:
         """None lets the backend pick (GPU when available)."""
         return None if self.device_name in {"auto", ""} else self.device_name
 
-    def validate(self) -> None:
-        """Raise if either threshold is out of `[0, 1]`, or `review_confidence`
-        is above `confidence` (which would make the review band empty/inverted)."""
-        if not 0.0 <= self.confidence <= 1.0:
-            raise ConfigError("detect confidence must be between 0 and 1")
-        if not 0.0 <= self.review_confidence <= 1.0:
-            raise ConfigError("review confidence must be between 0 and 1")
-        if self.review_confidence > self.confidence:
-            raise ConfigError("review confidence must be <= detect confidence")
-
 
 @dataclass(frozen=True, slots=True)
 class AnalyzeSettings:
-    """The vision-language engine, and the two independent jobs it is given.
+    """The vision-language engine: where it is, and how to talk to it.
 
-    One server, one model, two switches. `adjudicate` decides where photos go
-    and `enabled` only makes them searchable, so running one without the other
-    has to be possible in both directions: a first pass over a big library
-    wants the verdicts and not the descriptions, and a machine with no Ollama
-    at all wants neither.
+    Used for two independent jobs — the semantic description pass, which
+    always runs, and the adjudication ("second opinion") pass, which runs
+    whenever `RuleSet.needs_adjudication()` says some rule asked for it. Both
+    used to have their own on/off setting here; both are gone in favour of
+    that per-rule decision.
     """
 
-    enabled: bool
-    #: Ask for a second opinion on what the detector was not sure about.
-    adjudicate: bool
     url: str
     model: str
     timeout: int
@@ -153,4 +139,3 @@ class Settings:
     def validate(self) -> None:
         """Validate every section that has anything to check."""
         self.library.validate()
-        self.detect.validate()

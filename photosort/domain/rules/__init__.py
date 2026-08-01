@@ -13,14 +13,17 @@ storage's job, which is what keeps this package free of I/O.
 from __future__ import annotations
 
 from ...errors import RuleError
-from .conditions import (AllOf, Always, AnyDetection, AnyOf, Condition, HasClass, InDoubt,
-                         MatchContext, NoneOf, Not, parse_condition, register_condition)
+from .conditions import (AllOf, Always, AnyDetection, AnyOf, ClassBand, Condition,
+                         DEFAULT_CONFIDENCE, DEFAULT_OLLAMA_REVIEW, DEFAULT_REVIEW_CONFIDENCE,
+                         HasClass, InDoubt, MatchContext, NoneOf, Not, parse_condition,
+                         register_condition)
 from .ruleset import (DOUBT_ACTIONS, DOUBT_RULE_NAME, RULES_VERSION, Rule, RuleSet,
                       reorder)
 
 __all__ = [
-    "AllOf", "Always", "AnyDetection", "AnyOf", "Condition", "DOUBT_ACTIONS",
-    "DOUBT_RULE_NAME", "HasClass", "InDoubt", "MatchContext", "NoneOf", "Not",
+    "AllOf", "Always", "AnyDetection", "AnyOf", "ClassBand", "Condition",
+    "DEFAULT_CONFIDENCE", "DEFAULT_OLLAMA_REVIEW", "DEFAULT_REVIEW_CONFIDENCE",
+    "DOUBT_ACTIONS", "DOUBT_RULE_NAME", "HasClass", "InDoubt", "MatchContext", "NoneOf", "Not",
     "parse_condition", "register_condition",
     "RULES_VERSION", "Rule", "RuleError", "RuleSet", "reorder",
 ]

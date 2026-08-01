@@ -6,12 +6,8 @@ from photosort.domain.decision import decide
 from photosort.domain.rules import Always, HasClass, Rule, RuleSet
 from tests.conftest import detection
 
-CONFIDENCE = 0.65
-REVIEW = 0.35
-
-
 def run(detections, ruleset):
-    return decide(list(detections), ruleset, CONFIDENCE, REVIEW)
+    return decide(list(detections), ruleset)
 
 
 def test_matches_the_expected_category(ruleset):
@@ -51,7 +47,7 @@ def test_noise_below_the_review_threshold_is_ignored(ruleset):
 
 def test_no_matching_rule_falls_back_to_none():
     empty = RuleSet((Rule("cats", HasClass("cat")),))
-    decision = decide([detection("dog", 0.9)], empty, CONFIDENCE, REVIEW)
+    decision = decide([detection("dog", 0.9)], empty)
     assert (decision.category, decision.action) == ("none", "ignore")
 
 
@@ -60,7 +56,7 @@ def test_rule_specific_confidence_is_honoured():
         Rule("maybe-cat", HasClass("cat", min_confidence=0.3), action="review"),
         Rule("none", Always(), action="ignore"),
     ))
-    decision = decide([detection("cat", 0.4)], ruleset, CONFIDENCE, REVIEW)
+    decision = decide([detection("cat", 0.4)], ruleset)
     assert decision.category == "maybe-cat"
     assert decision.action == "review"
 
@@ -71,5 +67,5 @@ def test_min_count_rule():
         Rule("none", Always(), action="ignore"),
     ))
     two = [detection("cat", 0.9), detection("cat", 0.9)]
-    assert decide(two, ruleset, CONFIDENCE, REVIEW).category == "none"
-    assert decide(two + [detection("cat", 0.8)], ruleset, CONFIDENCE, REVIEW).category == "crowd"
+    assert decide(two, ruleset).category == "none"
+    assert decide(two + [detection("cat", 0.8)], ruleset).category == "crowd"

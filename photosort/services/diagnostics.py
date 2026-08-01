@@ -123,24 +123,33 @@ def _detector_checks(ctx: AppContext) -> list[Check]:
         return [Check("detector", str(exc), "fail")]
 
 
+def _needs_adjudication(ctx: AppContext) -> bool:
+    """Whether the saved rules ask for a second opinion at all. False (not a
+    failure) when the rules file itself is unusable — that is already reported
+    by `_rules_checks`, and is not this check's business to repeat."""
+    try:
+        return rules_service.active_ruleset(ctx).needs_adjudication()
+    except PhotosortError:
+        return False
+
+
 def _analysis_checks(ctx: AppContext) -> list[Check]:
     """Ollama, and the two independent jobs it is asked to do.
 
-    Reported separately because they fail differently: without the second
-    opinion, uncertain photos are sorted more crudely; without the semantic
-    pass, they are sorted identically but cannot be searched by description.
-    Either can be off while the other runs, so neither may speak for Ollama.
+    The semantic pass always runs; the second opinion runs only when some
+    rule's class band turns it on (`RuleSet.needs_adjudication()`). Reported
+    separately because they fail differently: without the second opinion,
+    uncertain photos are sorted more crudely; with Ollama unreachable, they
+    are sorted identically but cannot be searched by description either.
     """
     settings = ctx.settings.analyze
+    needs_adjudication = _needs_adjudication(ctx)
     jobs = [
-        Check("second opinion", "on" if settings.adjudicate else
-              "disabled — uncertain photos go straight to review",
-              "ok" if settings.adjudicate else "info"),
-        Check("semantic pass", "on" if settings.enabled else "disabled",
-              "ok" if settings.enabled else "info"),
+        Check("second opinion", "on" if needs_adjudication else
+              "no rule asks for one — uncertain photos go straight to review",
+              "ok" if needs_adjudication else "info"),
+        Check("semantic pass", "on", "ok"),
     ]
-    if not (settings.enabled or settings.adjudicate):
-        return [*jobs, Check("ollama", "not needed — nothing asks for it")]
     try:
         client = OllamaClient(settings)
         models = client.health()
@@ -163,14 +172,11 @@ def ollama_problem(ctx: AppContext) -> str | None:
     a run starts rather than after every uncertain photo lands in `_Review`
     unresolved and every semantic tag goes missing.
 
-    None when nothing needs Ollama: `health()` costs a request, so it is only
-    worth making when the second opinion or the semantic pass is switched on.
+    The semantic pass always runs, so Ollama is always needed — unlike the
+    second opinion, there is no ruleset state that makes this check skippable.
     """
-    settings = ctx.settings.analyze
-    if not (settings.enabled or settings.adjudicate):
-        return None
     try:
-        OllamaClient(settings).health()
+        OllamaClient(ctx.settings.analyze).health()
     except Exception as exc:  # noqa: BLE001 - a diagnostic must never itself crash
         return str(exc)
     return None

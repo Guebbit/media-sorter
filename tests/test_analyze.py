@@ -69,7 +69,6 @@ def fake_ollama():
 @pytest.fixture
 def client(env, fake_ollama, monkeypatch):
     monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", fake_ollama.url)
-    monkeypatch.setenv("PHOTOSORT_ANALYZE_ENABLED", "1")
     return OllamaClient(load_settings().analyze, ["cat", "dog"])
 
 

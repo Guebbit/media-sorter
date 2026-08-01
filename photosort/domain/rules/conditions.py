@@ -13,6 +13,25 @@ from typing import Any, Callable, Sequence
 from ...errors import RuleError
 from ..detection import Detection
 
+#: What a class condition gets when it does not set its own band. Replaces the
+#: old global `DETECT_CONFIDENCE`/`REVIEW_CONFIDENCE`/`ADJUDICATE_ENABLED`
+#: settings — there is no machine-wide right answer for these any more than
+#: there is for the class itself, so the fallback lives in code, not config.
+DEFAULT_CONFIDENCE = 0.65
+DEFAULT_REVIEW_CONFIDENCE = 0.35
+DEFAULT_OLLAMA_REVIEW = True
+
+
+@dataclass(frozen=True, slots=True)
+class ClassBand:
+    """One class's resolved confidence policy: the auto-pass threshold, the
+    review-band floor below it, and whether a borderline hit gets asked to
+    Ollama at all."""
+
+    confidence: float
+    review_confidence: float
+    ollama_review: bool
+
 
 @dataclass(frozen=True, slots=True)
 class MatchContext:
@@ -58,6 +77,14 @@ class Condition(ABC):
         looks for."""
         return set()
 
+    def class_bands(self) -> dict[str, tuple[float | None, float | None, bool | None]]:
+        """Which classes this condition sets a confidence policy for, and what
+        it asked for — `None` in a slot means "use the default." Only `HasClass`
+        actually answers; everything else unions or delegates to its children,
+        so a rule's per-class overrides surface regardless of how deep in an
+        `all_of`/`any_of` tree the `class` node sits."""
+        return {}
+
     def describe(self) -> str:
         """Human-readable summary, for `rules show` and the editor."""
         return self.__class__.__name__.lower()
@@ -65,11 +92,20 @@ class Condition(ABC):
 
 @dataclass(frozen=True, slots=True)
 class HasClass(Condition):
-    """At least `min_count` detections of `cls`, each at or above `min_confidence`."""
+    """At least `min_count` detections of `cls`, each at or above `min_confidence`.
+
+    `min_review_confidence` and `ollama_review` do not affect matching at
+    all — `matches` only ever asks about `min_confidence`, same as before.
+    They are read separately, by `RuleSet.class_bands()`, to decide what
+    happens to a detection of `cls` that falls short of `min_confidence`:
+    whether it is worth a second opinion, and from how low a score.
+    """
 
     cls: str
     min_count: int = 1
     min_confidence: float | None = None
+    min_review_confidence: float | None = None
+    ollama_review: bool | None = None
 
     def matches(self, ctx: MatchContext) -> bool:
         return ctx.count(self.cls, self.min_confidence) >= self.min_count
@@ -80,14 +116,27 @@ class HasClass(Condition):
             node["min_count"] = self.min_count
         if self.min_confidence is not None:
             node["min_confidence"] = self.min_confidence
+        if self.min_review_confidence is not None:
+            node["min_review_confidence"] = self.min_review_confidence
+        if self.ollama_review is not None:
+            node["ollama_review"] = self.ollama_review
         return node
 
     def classes(self) -> set[str]:
         return {self.cls}
 
+    def class_bands(self) -> dict[str, tuple[float | None, float | None, bool | None]]:
+        return {self.cls: (self.min_confidence, self.min_review_confidence, self.ollama_review)}
+
     def describe(self) -> str:
         text = f"{self.min_count}+ {self.cls}" if self.min_count > 1 else self.cls
-        return text if self.min_confidence is None else f"{text} @{self.min_confidence:.2f}"
+        if self.min_confidence is not None:
+            text = f"{text} @{self.min_confidence:.2f}"
+        if self.min_review_confidence is not None:
+            text = f"{text} (review @{self.min_review_confidence:.2f})"
+        if self.ollama_review is not None:
+            text = f"{text} [ollama {'on' if self.ollama_review else 'off'}]"
+        return text
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +167,9 @@ class _Composite(Condition):
     key = ""
 
     def __init__(self, children: Sequence[Condition]):
+        """Reject an empty operator at construction time — an `all_of` with
+        nothing to require, or an `any_of` with nothing that could satisfy
+        it, is a rule author's mistake, not a valid ruleset."""
         if not children:
             raise RuleError(f"{self.key!r} needs at least one child condition")
         self.children = tuple(children)
@@ -127,6 +179,32 @@ class _Composite(Condition):
 
     def classes(self) -> set[str]:
         return set().union(*(child.classes() for child in self.children))
+
+    def class_bands(self) -> dict[str, tuple[float | None, float | None, bool | None]]:
+        """Every child's bands, merged left to right, one field at a time.
+
+        A child that mentions a class without overriding a field must not
+        shadow a later child's override of that same field — see
+        `RuleSet.class_bands()`, which resolves the same way across whole
+        rules for the identical reason.
+        """
+        confidences: dict[str, float] = {}
+        reviews: dict[str, float] = {}
+        ollama_reviews: dict[str, bool] = {}
+        classes: set[str] = set()
+        for child in self.children:
+            for cls, (confidence, review_confidence, ollama_review) in child.class_bands().items():
+                classes.add(cls)
+                if confidence is not None:
+                    confidences.setdefault(cls, confidence)
+                if review_confidence is not None:
+                    reviews.setdefault(cls, review_confidence)
+                if ollama_review is not None:
+                    ollama_reviews.setdefault(cls, ollama_review)
+        return {
+            cls: (confidences.get(cls), reviews.get(cls), ollama_reviews.get(cls))
+            for cls in classes
+        }
 
     def describe(self) -> str:
         joiner = {"all_of": " and ", "any_of": " or ", "none_of": " nor "}[self.key]
@@ -181,6 +259,9 @@ class Not(Condition):
 
     def classes(self) -> set[str]:
         return self.child.classes()
+
+    def class_bands(self) -> dict[str, tuple[float | None, float | None, bool | None]]:
+        return self.child.class_bands()
 
     def describe(self) -> str:
         return f"not ({self.child.describe()})"
@@ -246,7 +327,23 @@ def _parse_class(node: dict[str, Any]) -> Condition:
         if not isinstance(confidence, (int, float)) or not 0.0 <= float(confidence) <= 1.0:
             raise RuleError(f"'min_confidence' must be between 0 and 1, got {confidence!r}")
         confidence = float(confidence)
-    return HasClass(name.strip().lower(), min_count, confidence)
+    review_confidence = node.get("min_review_confidence")
+    if review_confidence is not None:
+        if (not isinstance(review_confidence, (int, float))
+                or not 0.0 <= float(review_confidence) <= 1.0):
+            raise RuleError(
+                f"'min_review_confidence' must be between 0 and 1, got {review_confidence!r}"
+            )
+        review_confidence = float(review_confidence)
+        if confidence is not None and review_confidence > confidence:
+            raise RuleError(
+                f"'min_review_confidence' must be <= 'min_confidence', "
+                f"got {review_confidence!r} > {confidence!r}"
+            )
+    ollama_review = node.get("ollama_review")
+    if ollama_review is not None and not isinstance(ollama_review, bool):
+        raise RuleError(f"'ollama_review' must be a boolean, got {ollama_review!r}")
+    return HasClass(name.strip().lower(), min_count, confidence, review_confidence, ollama_review)
 
 
 def _parse_any_detection(node: dict[str, Any]) -> Condition:

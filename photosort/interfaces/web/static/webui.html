@@ -47,6 +47,7 @@
   .spacer { flex:1; }
   .cond { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:6px 0; padding-left:2px; }
   .muted { color:var(--dim); font-size:13px; }
+  .muted.disabled { opacity:0.5; }
   .pill { display:inline-block; padding:2px 8px; border-radius:99px; background:var(--bg);
           border:1px solid var(--line); font-size:12px; color:var(--dim); }
   .pill.act-delete { color:var(--danger); border-color:var(--danger); }
@@ -154,7 +155,6 @@
   <div class="tabs">
     <button data-tab="rules" class="active">Rules</button>
     <button data-tab="run">Run</button>
-    <button data-tab="preview">Preview</button>
     <button data-tab="settings">Settings</button>
     <button data-tab="json">JSON</button>
   </div>
@@ -346,47 +346,55 @@
       </div>
     </details>
 
-    <div class="grid">
-      <div class="card"><h2>Categories</h2><table id="tbl-categories"></table>
-        <div class="muted" style="margin-top:8px">Which rule matched each photo.</div></div>
-      <div class="card"><h2>Actions</h2><table id="tbl-actions"></table>
-        <div class="muted" style="margin-top:8px">What that rule asked for.</div></div>
-      <div class="card"><h2>Detections</h2><table id="tbl-classes"></table>
-        <div class="muted" style="margin-top:8px">Objects found, across every photo.</div></div>
-      <div class="card"><h2>Second opinion</h2><table id="tbl-verdicts"></table>
-        <div class="muted" style="margin-top:8px">How the borderline calls were settled.</div></div>
-      <div class="card"><h2>Counters</h2><table id="tbl-pipeline"></table>
-        <div class="muted" style="margin-top:8px">The same numbers as the bars, exactly.</div></div>
-    </div>
-  </section>
+    <!-- Nothing here is ever written to disk: both buttons only plan or
+         re-evaluate from what step 2 already stored. Closed by default since
+         it is a check you reach for, not something read on every visit. -->
+    <details class="card explain" style="margin-bottom:16px">
+      <summary>Preview what would happen</summary>
+      <div class="explain-body">
+        <div class="bar">
+          <button class="primary" id="btn-preview">Preview what would happen</button>
+          <button id="btn-whatif">What if I applied these rules?</button>
+          <span class="status" id="preview-status"></span>
+        </div>
+        <p class="muted">
+          Nothing is written by either button. Use this before enabling any rule that
+          moves or removes your originals.
+          <br><strong>Preview what would happen</strong> plans the real work: every link
+          that would be created, every file that would be deleted, from the decisions
+          already stored. <strong>What if I applied these rules?</strong> answers a
+          different question — it re-runs the <em>current</em> rules over the detections
+          in the database and reports which category each photo would land in, so you
+          can judge a rule edit before committing to it.
+          <br>Both need step 2 above to have examined some photos first: with nothing
+          detected there is nothing to plan, and both will honestly come back empty.
+        </p>
+        <div id="preview-note" class="muted hidden" style="margin-bottom:14px"></div>
+        <div class="grid">
+          <div class="card"><h2>Planned actions</h2><table id="tbl-preview"></table></div>
+          <div class="card"><h2>Rule outcome (stored detections)</h2><table id="tbl-whatif"></table></div>
+        </div>
+        <div class="card" style="margin-top:16px"><h2>Sample</h2>
+          <div class="scroll"><table id="tbl-sample"></table></div>
+        </div>
+      </div>
+    </details>
 
-  <!-- -------------------------------------------------------- PREVIEW -->
-  <section id="tab-preview" class="hidden">
-    <div class="bar">
-      <button class="primary" id="btn-preview">Preview what would happen</button>
-      <button id="btn-whatif">What if I applied these rules?</button>
-      <span class="status" id="preview-status"></span>
-    </div>
-    <p class="muted">
-      Nothing is written by either button. Use this before enabling any rule that moves
-      or removes your originals.
-      <br><strong>Preview what would happen</strong> plans the real work: every link that
-      would be created, every file that would be deleted, from the decisions already
-      stored. <strong>What if I applied these rules?</strong> answers a different
-      question — it re-runs the <em>current</em> rules over the detections in the
-      database and reports which category each photo would land in, so you can judge a
-      rule edit before committing to it.
-      <br>Both need step 2 on the Run tab to have examined some photos first: with
-      nothing detected there is nothing to plan, and both will honestly come back empty.
-    </p>
-    <div id="preview-note" class="muted hidden" style="margin-bottom:14px"></div>
-    <div class="grid">
-      <div class="card"><h2>Planned actions</h2><table id="tbl-preview"></table></div>
-      <div class="card"><h2>Rule outcome (stored detections)</h2><table id="tbl-whatif"></table></div>
-    </div>
-    <div class="card" style="margin-top:16px"><h2>Sample</h2>
-      <div class="scroll"><table id="tbl-sample"></table></div>
-    </div>
+    <details class="card explain" style="margin-bottom:16px">
+      <summary>Categories, actions and detections</summary>
+      <div class="grid" style="margin-top:12px">
+        <div class="card"><h2>Categories</h2><table id="tbl-categories"></table>
+          <div class="muted" style="margin-top:8px">Which rule matched each photo.</div></div>
+        <div class="card"><h2>Actions</h2><table id="tbl-actions"></table>
+          <div class="muted" style="margin-top:8px">What that rule asked for.</div></div>
+        <div class="card"><h2>Detections</h2><table id="tbl-classes"></table>
+          <div class="muted" style="margin-top:8px">Objects found, across every photo.</div></div>
+        <div class="card"><h2>Second opinion</h2><table id="tbl-verdicts"></table>
+          <div class="muted" style="margin-top:8px">How the borderline calls were settled.</div></div>
+        <div class="card"><h2>Counters</h2><table id="tbl-pipeline"></table>
+          <div class="muted" style="margin-top:8px">The same numbers as the bars, exactly.</div></div>
+      </div>
+    </details>
   </section>
 
   <!-- ------------------------------------------------------- SETTINGS -->
@@ -431,6 +439,11 @@ let META = { classes: [], actions: [], config: {}, doubt_rule: "in-doubt", doubt
 // Named by the server so the editor and the rules engine cannot disagree
 // about which rule is the fixed one.
 let DOUBT_RULE = META.doubt_rule, DOUBT_ACTIONS = META.doubt_actions;
+// What a condition gets when it leaves conf/review blank — placeholder text
+// only, mirroring `domain.rules.conditions.DEFAULT_CONFIDENCE` /
+// `DEFAULT_REVIEW_CONFIDENCE`. The server, not this constant, is what
+// actually applies the fallback.
+const DEFAULT_CONFIDENCE = 0.65, DEFAULT_REVIEW_CONFIDENCE = 0.35;
 let RULES = [];
 
 async function api(path, options) {
@@ -446,7 +459,7 @@ const setStatus = (sel, text, kind = "") => {
 };
 
 /* ------------------------------------------------------------------ tabs */
-const TABS = ["rules", "run", "preview", "settings", "json"];
+const TABS = ["rules", "run", "settings", "json"];
 // In the hash, so a reload — or a link to "the Run tab" — lands where it says.
 function showTab(name) {
   if (!TABS.includes(name)) name = TABS[0];
@@ -467,7 +480,12 @@ function conditionToForm(when) {
   if (when && when.always) return { mode: "always", items: [] };
   const wrap = (node) => {
     if (typeof node === "string") return { class: node, min_count: 1 };
-    return { class: node.class, min_count: node.min_count || 1, min_confidence: node.min_confidence };
+    return {
+      class: node.class, min_count: node.min_count || 1,
+      min_confidence: node.min_confidence,
+      min_review_confidence: node.min_review_confidence,
+      ollama_review: node.ollama_review,
+    };
   };
   for (const mode of ["all_of", "any_of", "none_of"]) {
     if (when && when[mode]) {
@@ -487,6 +505,11 @@ function formToCondition(form) {
     if (it.min_count && it.min_count !== 1) node.min_count = it.min_count;
     if (it.min_confidence !== undefined && it.min_confidence !== null && it.min_confidence !== "")
       node.min_confidence = Number(it.min_confidence);
+    if (it.min_review_confidence !== undefined && it.min_review_confidence !== null
+        && it.min_review_confidence !== "")
+      node.min_review_confidence = Number(it.min_review_confidence);
+    if (it.ollama_review !== undefined && it.ollama_review !== null)
+      node.ollama_review = it.ollama_review;
     return node;
   });
   if (items.length === 1 && form.mode === "all_of") return items[0];
@@ -601,20 +624,46 @@ function renderRules() {
 
         const conf = el("input", {
           type: "number", min: 0, max: 1, step: 0.05,
-          value: item.min_confidence ?? "", placeholder: META.config.confidence,
-          title: "Confidence override (blank = global threshold)",
+          value: item.min_confidence ?? "", placeholder: DEFAULT_CONFIDENCE,
+          title: "Confidence override (blank = default) — at or above this, a hit of this class counts",
         });
         conf.oninput = () => {
           item.min_confidence = conf.value === "" ? undefined : Number(conf.value);
           rule.when = formToCondition(form);
         };
 
+        const reviewLabel = el("span", { className: "muted", textContent: "Review (AI) ≥" });
+        const review = el("input", {
+          type: "number", min: 0, max: 1, step: 0.05,
+          value: item.min_review_confidence ?? "", placeholder: DEFAULT_REVIEW_CONFIDENCE,
+          disabled: item.ollama_review === false,
+          title: "Review-band floor override (blank = default) — between this and Confidence (YOLO), "
+            + "a hit is borderline and (if AI review is on) asked to Ollama",
+        });
+        review.oninput = () => {
+          item.min_review_confidence = review.value === "" ? undefined : Number(review.value);
+          rule.when = formToCondition(form);
+        };
+
+        const ollama = el("input", {
+          type: "checkbox", checked: item.ollama_review !== false,
+          title: "Whether a borderline hit of this class is asked to Ollama at all",
+        });
+        ollama.onchange = () => {
+          item.ollama_review = ollama.checked ? undefined : false;
+          rule.when = formToCondition(form);
+          review.disabled = !ollama.checked;
+          reviewLabel.classList.toggle("disabled", !ollama.checked);
+        };
+        reviewLabel.classList.toggle("disabled", item.ollama_review === false);
+
         const rm = el("button", { className: "small", textContent: "×", title: "Remove requirement" });
         rm.onclick = () => { form.items.splice(itemIndex, 1); rule.when = formToCondition(form); renderRules(); };
 
         card.append(el("div", { className: "cond" }, [
           el("span", { className: "muted", textContent: "at least" }), count, cls,
-          el("span", { className: "muted", textContent: "conf ≥" }), conf, rm,
+          el("span", { className: "muted", textContent: "Confidence (YOLO) ≥" }), conf,
+          reviewLabel, review, ollama, rm,
         ]));
       });
       const add = el("button", { className: "small", textContent: "+ requirement" });
@@ -638,10 +687,8 @@ async function loadMeta() {
   $("#meta-line").textContent =
     `in: ${folders.length ? folders.join(", ") : "not set"} · ` +
     `out: ${META.config.output_folder} · ` +
-    `${META.config.model} · ${META.config.confidence} confidence · ` +
-    (META.config.analyze_enabled
-      ? `${META.config.ollama_model} @ ${META.config.ollama_url}`
-      : "no semantic pass");
+    `${META.config.model} · ` +
+    `${META.config.ollama_model} @ ${META.config.ollama_url}`;
 
   // Scanning is the first button on this tab and the only one that cannot work
   // without them, so the Run tab is where both saying so and fixing it belong.
@@ -676,24 +723,25 @@ async function loadMeta() {
       + `and sorted photos will not get semantic descriptions.`;
   }
 
-  // What step 2 will actually do depends on these, and they are set on another tab.
-  $("#adjudicate-note").innerHTML = META.config.adjudicate_enabled
-    ? `Where the detector is <em>unsure</em> — it half-saw something, between `
-      + `${META.config.review_confidence} and ${META.config.confidence} — the `
+  // What step 2 will actually do depends on the rules' own bands, set in the
+  // rule editor's "conf ≥" / "review ≥" / AI review controls per class.
+  $("#adjudicate-note").innerHTML = META.config.adjudication_needed
+    ? `Where the detector is <em>unsure</em> about a class banded for AI review — it `
+      + `half-saw something, between that class's review floor and its confidence — the `
       + `<span class="term">second opinion</span> asks `
       + `<code>${META.config.ollama_model}</code> whether the subject is really there. `
       + `Confirmed, and the photo is sorted as a normal match; rejected, and it stops being `
-      + `flagged; if the model cannot tell either, it goes to <code>_Review</code> for you.`
-    : `The second opinion is off, so a photo the detector is unsure about goes straight to `
-      + `<code>_Review</code> without anything else looking at it.`;
+      + `flagged; if the model cannot tell either, it goes to <code>_Review</code> for you. `
+      + `Set per class in the rule editor.`
+    : `No rule currently asks for a second opinion, so a photo the detector is unsure about `
+      + `goes straight to <code>_Review</code> without anything else looking at it. Turn `
+      + `"AI review" on for a class in the rule editor to change that.`;
 
-  $("#analyze-note").innerHTML = META.config.analyze_enabled
-    ? `Then the <span class="term">semantic pass</span> describes the photos the rules kept — breed, count, `
-      + `indoors or out — using <code>${META.config.ollama_model}</code>. It is slow (seconds `
-      + `per photo, against dozens per second for the detector), it only runs on photos the `
-      + `rules did not <code>ignore</code>, and it never changes which photo goes where.`
-    : `The semantic pass is off, so this is detection only — which is the fast choice, and `
-      + `changes nothing about where photos are sorted.`;
+  $("#analyze-note").innerHTML =
+    `Then the <span class="term">semantic pass</span> describes the photos the rules kept — breed, count, `
+    + `indoors or out — using <code>${META.config.ollama_model}</code>. It is slow (seconds `
+    + `per photo, against dozens per second for the detector), it only runs on photos the `
+    + `rules did not <code>ignore</code>, and it never changes which photo goes where.`;
 
   // move and delete both consume originals and are always available actions —
   // the checkbox below is the one gate left on either running.
@@ -998,9 +1046,8 @@ function diagnose(data) {
     return [`Every photo has been examined, and the detector found no ${looking} in any of them.`,
             `That is why nothing is sorted and why <strong>Sort now</strong> does nothing: with no detections, `
             + `every photo falls through to the last rule, whose action is <code>ignore</code>. `
-            + `If you expected matches, lower the Confidence (YOLO) threshold (currently `
-            + `${META.config.confidence}) in the Settings tab, `
-            + `or check the Rules tab — the detector only looks for what the rules mention.`];
+            + `If you expected matches, lower the "conf ≥" override for that class in the Rules tab, `
+            + `or check that the rules mention the class you expected at all.`];
 
   if (!linkable)
     return [`${num(p.total)} photos examined, ${num(detections)} objects found, but no rule asked for anything to be done.`,
@@ -1108,9 +1155,9 @@ function renderProgress(data) {
   box.append(bar({
     label: "Settled by the second opinion",
     done: p.adjudicate_done, total: p.adjudicate_total, errors: p.adjudicate_error,
-    running, rate: rates.adjudicate, na: !META.config.adjudicate_enabled,
-    note: !META.config.adjudicate_enabled
-      ? "Turned off in Settings. Photos the detector is unsure about go straight to the review folder."
+    running, rate: rates.adjudicate, na: !META.config.adjudication_needed,
+    note: !META.config.adjudication_needed
+      ? "No rule asks for AI review. Photos the detector is unsure about go straight to the review folder."
       : p.adjudicate_total
         ? ""
         : "Only photos the detector was unsure about reach this pass — it was sure every time so far.",
@@ -1119,12 +1166,10 @@ function renderProgress(data) {
   box.append(bar({
     label: "Described by the semantic pass",
     done: p.analyze_done, total: analyzeTotal, errors: p.analyze_error,
-    running, rate: rates.analyze, na: !META.config.analyze_enabled,
-    note: !META.config.analyze_enabled
-      ? "Turned off in Settings. It never affects which photos get sorted where."
-      : analyzeTotal
-        ? ""
-        : "Only photos the rules did not <code>ignore</code> reach this pass — nothing qualifies yet.",
+    running, rate: rates.analyze,
+    note: analyzeTotal
+      ? ""
+      : "Only photos the rules did not <code>ignore</code> reach this pass — nothing qualifies yet.",
   }));
 
   box.append(bar({
@@ -1276,7 +1321,7 @@ const startJob = async (path, body) => {
   }
 };
 $("#btn-scan").onclick = () => startJob("/api/run/scan");
-$("#btn-pipeline").onclick = () => startJob("/api/run/pipeline", { analyze: META.config.analyze_enabled });
+$("#btn-pipeline").onclick = () => startJob("/api/run/pipeline", {});
 $("#btn-apply").onclick = () => startJob("/api/run/apply", { confirmed: $("#confirm-consuming").checked });
 $("#btn-recheck").onclick = () => startJob("/api/run/recheck");
 $("#btn-save-folders").onclick = saveFolders;
