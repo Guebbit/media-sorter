@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from photosort.config import dotenv, load_settings, overrides, settings_file, source_of
-from photosort.errors import ConfigError
+from app.config import dotenv, load_settings, overrides, settings_file, source_of
+from app.errors import ConfigError
 
 
 # ----------------------------------------------------------------- .env parsing
@@ -23,41 +23,41 @@ def test_parses_the_ordinary_shapes():
         "\n".join([
             "# a comment",
             "",
-            "PHOTOSORT_A=plain",
-            "  PHOTOSORT_B = spaced ",
-            'PHOTOSORT_C="quoted value"',
-            "PHOTOSORT_D='single'",
-            "export PHOTOSORT_E=exported",
-            "PHOTOSORT_F=trailing   # inline comment",
+            "MEDIASORT_A=plain",
+            "  MEDIASORT_B = spaced ",
+            'MEDIASORT_C="quoted value"',
+            "MEDIASORT_D='single'",
+            "export MEDIASORT_E=exported",
+            "MEDIASORT_F=trailing   # inline comment",
             "not a setting",
         ])
     )
     assert values == {
-        "PHOTOSORT_A": "plain",
-        "PHOTOSORT_B": "spaced",
-        "PHOTOSORT_C": "quoted value",
-        "PHOTOSORT_D": "single",
-        "PHOTOSORT_E": "exported",
-        "PHOTOSORT_F": "trailing",
+        "MEDIASORT_A": "plain",
+        "MEDIASORT_B": "spaced",
+        "MEDIASORT_C": "quoted value",
+        "MEDIASORT_D": "single",
+        "MEDIASORT_E": "exported",
+        "MEDIASORT_F": "trailing",
     }
 
 
 def test_a_hash_inside_a_value_survives():
     """A URL fragment or a colour is not a comment."""
-    assert dotenv.parse("PHOTOSORT_X=http://host/#frag")["PHOTOSORT_X"] == "http://host/#frag"
-    assert dotenv.parse('PHOTOSORT_Y="a # b"')["PHOTOSORT_Y"] == "a # b"
+    assert dotenv.parse("MEDIASORT_X=http://host/#frag")["MEDIASORT_X"] == "http://host/#frag"
+    assert dotenv.parse('MEDIASORT_Y="a # b"')["MEDIASORT_Y"] == "a # b"
 
 
 def test_env_file_fills_gaps_but_never_overrides(tmp_path, monkeypatch):
     path = tmp_path / ".env"
-    path.write_text("PHOTOSORT_OLLAMA_MODEL=from-file\nPHOTOSORT_DETECT_MODEL=from-file\n")
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_MODEL", "from-environment")
+    path.write_text("MEDIASORT_OLLAMA_MODEL=from-file\nMEDIASORT_DETECT_MODEL=from-file\n")
+    monkeypatch.setenv("MEDIASORT_OLLAMA_MODEL", "from-environment")
 
     applied = dotenv.load(path)
 
-    assert applied == {"PHOTOSORT_DETECT_MODEL": "from-file"}
+    assert applied == {"MEDIASORT_DETECT_MODEL": "from-file"}
     import os
-    assert os.environ["PHOTOSORT_OLLAMA_MODEL"] == "from-environment"
+    assert os.environ["MEDIASORT_OLLAMA_MODEL"] == "from-environment"
 
 
 def test_an_explicit_missing_env_file_loads_nothing(tmp_path):
@@ -65,7 +65,7 @@ def test_an_explicit_missing_env_file_loads_nothing(tmp_path):
 
 
 def test_the_search_walks_up_to_the_project(tmp_path, monkeypatch):
-    (tmp_path / ".env").write_text("PHOTOSORT_DETECT_MODEL=found\n")
+    (tmp_path / ".env").write_text("MEDIASORT_DETECT_MODEL=found\n")
     nested = tmp_path / "a" / "b"
     nested.mkdir(parents=True)
     monkeypatch.chdir(nested)
@@ -77,7 +77,7 @@ def test_the_search_walks_up_to_the_project(tmp_path, monkeypatch):
 
 def test_heif_is_indexed_without_being_configured(env, monkeypatch):
     """`.env` used to add these, so dropping the line must not drop the support."""
-    monkeypatch.delenv("PHOTOSORT_EXTENSIONS", raising=False)
+    monkeypatch.delenv("MEDIASORT_EXTENSIONS", raising=False)
     extensions = load_settings().library.extensions
     assert {".heic", ".heif"} <= extensions
     assert ".jpg" in extensions
@@ -86,7 +86,7 @@ def test_heif_is_indexed_without_being_configured(env, monkeypatch):
 def test_our_own_output_tree_is_skipped_without_being_configured(env, monkeypatch):
     """Only matters for copy/hardlink modes, where the output is real files —
     but that is exactly when a library containing it would index its results."""
-    monkeypatch.delenv("PHOTOSORT_EXCLUDE_DIRS", raising=False)
+    monkeypatch.delenv("MEDIASORT_EXCLUDE_DIRS", raising=False)
     excluded = load_settings().library.exclude_dirs
     assert {"output", "Output", "Sorted"} <= excluded
     assert "node_modules" in excluded
@@ -97,7 +97,7 @@ def test_our_own_output_tree_is_skipped_without_being_configured(env, monkeypatc
 
 def test_only_enumerated_keys_are_editable(tmp_path):
     with pytest.raises(ConfigError, match="not a runtime-editable setting"):
-        overrides.save(tmp_path / "settings.json", {"PHOTOSORT_TELEPORT_ENABLED": "1"})
+        overrides.save(tmp_path / "settings.json", {"MEDIASORT_TELEPORT_ENABLED": "1"})
     with pytest.raises(ConfigError, match="not a runtime-editable setting"):
         overrides.save(tmp_path / "settings.json", {"DB": "/somewhere/else.db"})
 
@@ -159,7 +159,7 @@ def test_the_overlay_wins_over_the_environment(env, tmp_path):
 
 
 def test_the_environment_wins_when_the_overlay_is_silent(env, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_MODEL", "from-environment")
+    monkeypatch.setenv("MEDIASORT_OLLAMA_MODEL", "from-environment")
     overrides.save(settings_file(), {"OLLAMA_MODEL": "from-overlay"})
     overrides.clear(settings_file(), ["OLLAMA_MODEL"])
     assert load_settings().analyze.model == "from-environment"
@@ -171,7 +171,7 @@ def test_folders_come_back_as_paths(env, library_root, tmp_path):
 
 
 def test_source_is_reported_per_key(env, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", "http://box:11434")
+    monkeypatch.setenv("MEDIASORT_OLLAMA_URL", "http://box:11434")
     overrides.save(settings_file(), {"OLLAMA_MODEL": "llava:13b"})
     assert source_of("OLLAMA_MODEL") == "settings"
     assert source_of("OLLAMA_URL") == "environment"
@@ -180,7 +180,7 @@ def test_source_is_reported_per_key(env, monkeypatch):
 
 def test_a_folder_is_never_reported_as_coming_from_the_environment(env, monkeypatch):
     """Even with the variable exported, `.env` is not a layer for these two."""
-    monkeypatch.setenv("PHOTOSORT_INPUT_FOLDERS", "/stale")
+    monkeypatch.setenv("MEDIASORT_INPUT_FOLDERS", "/stale")
     overrides.clear(settings_file(), ["INPUT_FOLDERS"])
     assert source_of("INPUT_FOLDERS") == "default"
 
@@ -190,8 +190,8 @@ def test_a_folder_is_never_reported_as_coming_from_the_environment(env, monkeypa
 
 def test_the_environment_cannot_set_the_folders(env, monkeypatch, tmp_path, library_root):
     """The variables used to work, so a leftover export must not silently win."""
-    monkeypatch.setenv("PHOTOSORT_INPUT_FOLDERS", str(tmp_path / "elsewhere"))
-    monkeypatch.setenv("PHOTOSORT_OUTPUT_FOLDER", str(tmp_path / "elsewhere-out"))
+    monkeypatch.setenv("MEDIASORT_INPUT_FOLDERS", str(tmp_path / "elsewhere"))
+    monkeypatch.setenv("MEDIASORT_OUTPUT_FOLDER", str(tmp_path / "elsewhere-out"))
 
     settings = load_settings()
 
@@ -201,7 +201,7 @@ def test_the_environment_cannot_set_the_folders(env, monkeypatch, tmp_path, libr
 
 def test_an_unconfigured_library_still_loads(env, monkeypatch):
     """`config set` and the web UI have to run before anything is configured."""
-    monkeypatch.delenv("PHOTOSORT_INPUT_FOLDERS", raising=False)
+    monkeypatch.delenv("MEDIASORT_INPUT_FOLDERS", raising=False)
     overrides.clear(settings_file(), ["INPUT_FOLDERS"])
 
     settings = load_settings()          # must not raise
@@ -280,7 +280,7 @@ def test_a_derived_trash_folder_follows_the_output_folder(settings, tmp_path):
 
 
 def test_an_explicit_trash_folder_stays_put(settings, tmp_path, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_TRASH_FOLDER", str(tmp_path / "bin"))
+    monkeypatch.setenv("MEDIASORT_TRASH_FOLDER", str(tmp_path / "bin"))
     fixed = load_settings()
 
     moved = overrides.with_folders(fixed, output_folder=str(tmp_path / "elsewhere"))

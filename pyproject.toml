@@ -1,5 +1,5 @@
 [project]
-name = "photosort"
+name = "media-sorter"
 version = "0.1.0"
 description = "Offline photo indexer and sorter: scan, YOLO, rules, Ollama, symlinks."
 requires-python = ">=3.11"
@@ -16,14 +16,14 @@ dependencies = [
 ]
 
 [project.scripts]
-photosort = "photosort.interfaces.cli:main"
+mediasort = "app.interfaces.cli:main"
 
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["photosort*"]
+include = ["app*"]
 
 [tool.setuptools.package-data]
-"photosort.interfaces.web" = ["static/*.html"]
+"app.interfaces.web" = ["static/*.html"]

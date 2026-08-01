@@ -9,10 +9,10 @@ from dataclasses import replace
 
 import pytest
 
-from photosort.domain.decision import Decision
-from photosort.domain.detection import Detection
-from photosort.errors import ConfigError
-from photosort.services import library
+from app.domain.decision import Decision
+from app.domain.detection import Detection
+from app.errors import ConfigError
+from app.services import library
 from tests.conftest import make_image
 
 CAT = Detection("cat", 0.9, 0, 0, 1, 1)
@@ -141,7 +141,7 @@ def test_missing_input_folder_is_skipped(ctx, tmp_path):
 
 def _pointed_elsewhere(ctx, tmp_path):
     """`ctx`, reconfigured to a second, freshly-populated folder — as if the
-    user had changed which folder they point photosort at."""
+    user had changed which folder they point app at."""
     other = tmp_path / "photos-2"
     make_image(other / "z.jpg")
     elsewhere = replace(ctx.settings.library, input_folders=(other,))
@@ -166,7 +166,7 @@ def test_dropping_a_folder_prunes_the_output_it_produced(ctx, storage, library_r
     """A dropped folder's copies in the output tree must not become orphans
     nobody ever cleans up — the same pruning `apply` does for any other stale
     link, just triggered by the folder itself going away instead of a rule."""
-    from photosort.domain.decision import Decision
+    from app.domain.decision import Decision
 
     library.scan_library(ctx)
     row = storage.images.claim_detect(1)[0]

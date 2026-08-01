@@ -6,12 +6,12 @@ import json
 
 import pytest
 
-from photosort.actions.registry import default_registry
-from photosort.domain.rules import (AllOf, Always, AnyDetection, AnyOf, ClassBand,
+from app.actions.registry import default_registry
+from app.domain.rules import (AllOf, Always, AnyDetection, AnyOf, ClassBand,
                                     DEFAULT_CONFIDENCE, DEFAULT_OLLAMA_REVIEW,
                                     DEFAULT_REVIEW_CONFIDENCE, HasClass, MatchContext, NoneOf,
                                     Not, Rule, RuleError, RuleSet, parse_condition, reorder)
-from photosort.storage import RulesStore
+from app.storage import RulesStore
 from tests.conftest import detection
 
 
@@ -378,7 +378,7 @@ def test_the_doubt_rule_never_wins_an_ordinary_match():
 
 
 def test_the_doubt_rule_refuses_to_delete():
-    from photosort.actions.registry import default_registry
+    from app.actions.registry import default_registry
 
     ruleset = RuleSet.from_json({"version": 1, "rules": [
         {"name": "in-doubt", "when": {"in_doubt": True}, "action": "delete"},

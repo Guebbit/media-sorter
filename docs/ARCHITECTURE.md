@@ -1,13 +1,13 @@
 # Architecture
 
-A guided tour of `photosort/`: what each package is for, why it is separate
+A guided tour of `mediasort/`: what each package is for, why it is separate
 from its neighbors, and how a request actually flows through the code. For
 *what the software does* — YOLO, Ollama, rules, the review flow — see
 [CONCEPTS.md](CONCEPTS.md); this document is about where that behavior lives.
 
 ## The layering, in one picture
 
-`photosort/__init__.py` states the rule the whole codebase follows: each
+`mediasort/__init__.py` states the rule the whole codebase follows: each
 layer may only import from the ones above it in this list.
 
 ```mermaid
@@ -74,7 +74,7 @@ visible by grepping imports):
 Every exception the application raises on purpose, in one file, so a caller
 can catch by *intent* ("the configuration is wrong") without importing
 whichever module happens to detect the problem. Anything that is not a
-`PhotosortError` is a bug and is meant to crash with a traceback — that
+`MediaSortError` is a bug and is meant to crash with a traceback — that
 distinction is what lets `interfaces/web/server.py` turn one into a 400 and
 let the other one become a 500 with a logged stack trace.
 
@@ -125,7 +125,7 @@ No I/O, no third-party imports, no environment reads. Four pieces:
   from the working directory, parses `KEY=value` lines. Not a shell — no
   interpolation, no multi-line values.
 - **`overrides.py`** — the runtime overlay (`data/settings.json`): the small,
-  explicitly-enumerated set of settings the web UI and `photosort config
+  explicitly-enumerated set of settings the web UI and `mediasort config
   set` can change without editing `.env` or restarting. Validates before
   writing, so a rejected edit never corrupts the file.
 
@@ -246,7 +246,7 @@ of use cases, all taking an `AppContext` first:
   the index to JSON/CSV.
 - **`configuring.py`** — the settings form's read/write use cases, shared
   by `config show`/`config set` and the web UI's Settings tab.
-- **`diagnostics.py`** — `doctor()`: every check `photosort doctor` prints,
+- **`diagnostics.py`** — `doctor()`: every check `mediasort doctor` prints,
   returned as data rather than printed directly so the CLI can render a
   table and a future caller could serve the same checks as JSON.
 
@@ -276,7 +276,7 @@ sequenceDiagram
     participant Pipe as pipeline + detecting/analyzing
     participant DB as storage (SQLite)
 
-    User->>CLI: photosort run
+    User->>CLI: mediasort run
     CLI->>Svc: setup() -> AppContext.create()
     Svc->>DB: Storage(path).init()
     CLI->>Svc: load_rules(ctx)
@@ -368,26 +368,26 @@ anything from the codebase itself:
 
 ```
 photo-manager/
-├── data/                    # PHOTOSORT_* state — see config/env.py for defaults
-│   ├── photosort.db         # the index (this repo's data/photosort.db)
-│   ├── photosort.db-wal     # SQLite's write-ahead log (WAL mode — see engine.py)
-│   ├── photosort.db-shm     # SQLite's shared-memory index for the WAL
+├── data/                    # MEDIASORT_* state — see config/env.py for defaults
+│   ├── mediasort.db         # the index (this repo's data/mediasort.db)
+│   ├── mediasort.db-wal     # SQLite's write-ahead log (WAL mode — see engine.py)
+│   ├── mediasort.db-shm     # SQLite's shared-memory index for the WAL
 │   ├── rules.json           # the active ruleset — storage/rules_store.py
 │   ├── settings.json        # the runtime overlay — config/overrides.py
 │   └── models/              # downloaded YOLO weights, cached after first use
-└── output/                  # PHOTOSORT_OUTPUT_FOLDER — what the rules produce
+└── output/                  # MEDIASORT_OUTPUT_FOLDER — what the rules produce
     ├── <rule folders>/      # one per matching rule that copied/moved something
     ├── _Review/             # the doubt rule's default folder
-    └── _Trash/              # PHOTOSORT_TRASH_FOLDER — where `delete` actually goes
+    └── _Trash/              # MEDIASORT_TRASH_FOLDER — where `delete` actually goes
 ```
 
 `data/` is the index's home — `Paths` in `config/sections.py`, assembled in
-`config/env.py`. Every file in it is either a cache (`photosort.db`, the WAL
+`config/env.py`. Every file in it is either a cache (`mediasort.db`, the WAL
 files, `models/`) or a small hand-editable config file (`rules.json`,
 `settings.json`); none of it is a photo, and none of it is required to exist
-before the first run — `data/photosort.db` is created by `Storage.init()`,
+before the first run — `data/mediasort.db` is created by `Storage.init()`,
 `data/models/*.pt` on first use of the detector, and `data/rules.json` only
-by an explicit `photosort rules init` (see the [README](../README.md#rules)).
+by an explicit `mediasort rules init` (see the [README](../README.md#rules)).
 
 `output/` is not part of `data/` at all, and does not even default to living
 in this repo — `load_settings()` in `config/env.py` defaults it to a
@@ -431,7 +431,7 @@ what stops a `copy` run from finding and re-indexing its own copies, and a
   untracked distinction on each `Action` (`tracked = True` for `copy`,
   `False` for `move`/`delete`, since those don't leave a re-derivable
   duplicate behind) is what `executor.py`'s pruning pass reads.
-- **One error hierarchy.** Everything expected inherits `PhotosortError`
+- **One error hierarchy.** Everything expected inherits `MediaSortError`
   (`errors.py`). The CLI (`runtime.py`) and the web server
   (`interfaces/web/server.py`) each catch that one base class and turn it
   into a clean exit code or a 400 — anything else is a real bug and is

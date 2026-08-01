@@ -8,12 +8,12 @@ from __future__ import annotations
 
 import pytest
 
-from photosort.domain.decision import Decision
-from photosort.domain.detection import Detection
-from photosort.errors import ConfigError
-from photosort.interfaces.web import JobRunner, WebApi
-from photosort.services import library
-from photosort.storage import RulesStore
+from app.domain.decision import Decision
+from app.domain.detection import Detection
+from app.errors import ConfigError
+from app.interfaces.web import JobRunner, WebApi
+from app.services import library
+from app.storage import RulesStore
 
 
 CAT = Detection("cat", 0.9, 0, 0, 1, 1)
@@ -51,7 +51,7 @@ def test_saving_rules_persists_them(app, settings):
 
 
 def test_saving_an_unknown_action_is_rejected(app, settings):
-    from photosort.errors import RuleError
+    from app.errors import RuleError
 
     path = settings.paths.rules
     before = path.read_text() if path.exists() else None
@@ -87,7 +87,7 @@ def test_meta_exposes_actions_and_config(app, monkeypatch):
 
 
 def test_meta_reports_an_unreachable_ollama_when_a_job_needs_it(app, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("MEDIASORT_OLLAMA_URL", "http://127.0.0.1:1")
     app._reload()
     assert app.get_meta()["config"]["ollama_problem"]
 
@@ -97,7 +97,7 @@ def test_meta_is_quiet_about_ollama_when_it_is_reachable(app, monkeypatch):
 
     server = FakeOllama()
     try:
-        monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", server.url)
+        monkeypatch.setenv("MEDIASORT_OLLAMA_URL", server.url)
         app._reload()
         assert app.get_meta()["config"]["ollama_problem"] is None
     finally:
@@ -216,7 +216,7 @@ def test_a_finished_job_still_says_which_step_it_was(app, ctx):
 
 def test_stats_say_whether_the_output_tree_exists_yet(app, ctx, storage):
     """"ready to apply" and "already applied" are different sentences."""
-    from photosort.services import applying
+    from app.services import applying
 
     library.scan_library(ctx)
     for row in storage.images.claim_detect(10):
@@ -254,7 +254,7 @@ def test_saving_a_setting_takes_effect_without_a_restart(app, tmp_path):
 
 
 def test_a_rejected_setting_leaves_the_previous_one_in_force(app, tmp_path):
-    from photosort.config import overrides
+    from app.config import overrides
 
     overlay = app.ctx.settings.paths.settings
     before = app.ctx.settings.library.input_folders
@@ -301,7 +301,7 @@ def test_settings_cannot_change_under_a_running_job(app):
 
 
 def test_a_setting_can_be_handed_back_to_the_env_file(app, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_MODEL", "from-env-file")
+    monkeypatch.setenv("MEDIASORT_OLLAMA_MODEL", "from-env-file")
     app.put_settings({"values": {"OLLAMA_MODEL": "llava:13b"}})
     assert app.ctx.settings.analyze.model == "llava:13b"   # the overlay wins
 
@@ -422,7 +422,7 @@ def test_the_doubt_rule_action_can_be_changed_and_persists(app, settings):
 
 
 def test_saving_a_doubt_rule_that_deletes_is_rejected(app):
-    from photosort.errors import RuleError
+    from app.errors import RuleError
 
     with pytest.raises(RuleError, match="must be one of"):
         app.put_rules({"rules": [

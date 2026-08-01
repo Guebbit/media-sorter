@@ -1,4 +1,4 @@
-# photosort
+# mediasort
 
 Offline photo indexer and sorter. Points at a photo library, finds the photos
 containing whatever **you** define, and does whatever **you** decide with them —
@@ -45,16 +45,16 @@ pass). An NVIDIA GPU makes detection dramatically faster but is not required.
 make install          # creates .venv, downloads torch (~2.5 GB) — once
 source .venv/bin/activate
 
-photosort config set --input ~/Pictures   # the one thing it cannot guess
-photosort rules init --classes cat,dog,video   # nothing else seeds this for you
-photosort doctor      # check GPU, weights, Ollama, rules, paths
-photosort run         # scan -> detect -> analyze -> apply the rules
+mediasort config set --input ~/Pictures   # the one thing it cannot guess
+mediasort rules init --classes cat,dog,video   # nothing else seeds this for you
+mediasort doctor      # check GPU, weights, Ollama, rules, paths
+mediasort run         # scan -> detect -> analyze -> apply the rules
 ```
 
 `make install-cpu` instead of `make install` if you have no NVIDIA GPU.
 
 The folders are the one setting you have to give, and there are three ways to:
-`photosort config set` as above, the Settings tab in the web UI, or `--input` /
+`mediasort config set` as above, the Settings tab in the web UI, or `--input` /
 `--output` on a single command. Deliberately not `.env` — see
 [Configuration](#configuration).
 
@@ -82,7 +82,7 @@ is yours directly:
 
 ```bash
 source .venv/bin/activate
-photosort run
+mediasort run
 ```
 
 ## Configuration
@@ -90,7 +90,7 @@ photosort run
 ### The folders
 
 The photo folders and the output folder are not environment variables, and
-`PHOTOSORT_INPUT_FOLDERS` / `PHOTOSORT_OUTPUT_FOLDER` are **ignored** if you set
+`MEDIASORT_INPUT_FOLDERS` / `MEDIASORT_OUTPUT_FOLDER` are **ignored** if you set
 them. Which folders to read, and where to write a tree that `delete` rules are
 recorded against, are session choices rather than properties of the machine — an
 exported variable silently redirecting either one is a worse failure than having
@@ -98,25 +98,25 @@ to name it. So there are three places to say it, and they are the same three
 places for both folders:
 
 ```bash
-photosort config set --input ~/Pictures --output ~/Sorted   # saved, applies to everything after
-photosort config show                                       # what is in force, and from where
-photosort config unset OUTPUT_FOLDER                        # back to the default
+mediasort config set --input ~/Pictures --output ~/Sorted   # saved, applies to everything after
+mediasort config show                                       # what is in force, and from where
+mediasort config unset OUTPUT_FOLDER                        # back to the default
 
-photosort scan --input /mnt/usb-drive        # this run only, nothing saved
-photosort run  --input /mnt/usb-drive --output /mnt/usb-sorted
-photosort apply --output /tmp/try-a-layout
+mediasort scan --input /mnt/usb-drive        # this run only, nothing saved
+mediasort run  --input /mnt/usb-drive --output /mnt/usb-sorted
+mediasort apply --output /tmp/try-a-layout
 ```
 
 `--input` is repeatable (`-i a -i b`) and accepts a comma-separated list. The
-third place is `photosort web`, at the top of the **Run** tab and again in
+third place is `mediasort web`, at the top of the **Run** tab and again in
 **Settings** — one form over one draft, so an edit started on either is visible
 on the other — which writes the same file `config set` does,
 `data/settings.json`. A folder is validated before it is stored either way, so a
 typo is rejected rather than saved. Clearing the output folder resets it to the
 default rather than storing an empty string.
 
-The input folders have no default at all: with none set, `photosort scan` says so
-and stops, and `photosort doctor` reports it as a failing check.
+The input folders have no default at all: with none set, `mediasort scan` says so
+and stops, and `mediasort doctor` reports it as a failing check.
 
 The output folder **defaults to `<your first photo folder>/Sorted`** — the results
 belong with the photos they came from, not in whichever directory you happened to
@@ -127,7 +127,7 @@ photos. If you would rather have `Cat/` and `Dog/` directly among your photos,
 say so explicitly:
 
 ```bash
-photosort config set --output ~/Pictures     # same folder as the input
+mediasort config set --output ~/Pictures     # same folder as the input
 ```
 
 That is safe too — the scanner skips whatever the output and trash folders resolve
@@ -142,8 +142,8 @@ Three layers, lowest first:
 
 1. **built-in defaults** — a complete working run on their own;
 2. **`.env`** in the project folder (or the environment itself, which wins over
-   the file, so `PHOTOSORT_OLLAMA_MODEL=llava:13b photosort analyze` works);
-3. **`photosort config set` and the Settings tab**, for the handful of settings
+   the file, so `MEDIASORT_OLLAMA_MODEL=llava:13b mediasort analyze` works);
+3. **`mediasort config set` and the Settings tab**, for the handful of settings
    worth changing without restarting — the two folders, the Ollama URL and model,
    the two detector confidence thresholds, and whether the semantic pass runs
    at all.
@@ -165,9 +165,9 @@ below and nothing else, and every one of them works as shipped.
 
 | Variable                        | Default                  | What it does                                             |
 | ------------------------------- | ------------------------ | -------------------------------------------------------- |
-| `PHOTOSORT_OLLAMA_URL`          | `http://127.0.0.1:11434` | Your Ollama. Also in the UI.                             |
-| `PHOTOSORT_OLLAMA_MODEL`        | `llava-llama3`           | Vision model for both Ollama passes. Also in the UI.     |
-| `PHOTOSORT_DETECT_MODEL`        | `yolo11m.pt`             | `yolo11n` (fast) … `yolo11x` (accurate).                 |
+| `MEDIASORT_OLLAMA_URL`          | `http://127.0.0.1:11434` | Your Ollama. Also in the UI.                             |
+| `MEDIASORT_OLLAMA_MODEL`        | `llava-llama3`           | Vision model for both Ollama passes. Also in the UI.     |
+| `MEDIASORT_DETECT_MODEL`        | `yolo11m.pt`             | `yolo11n` (fast) … `yolo11x` (accurate).                 |
 
 The semantic pass always runs — there is no on/off switch for it any more, in
 the UI or in `.env`. The confidence band and the second opinion are per rule
@@ -180,16 +180,16 @@ editor's "conf ≥" / "review ≥" / AI review controls, or directly in
 
 The rest — the state paths, the worker counts, the detector's batch size and image
 size, Ollama's timeout and context window, the review folder, the web host and
-port — live in `photosort/config/env.py`, which is the one place they are written
-down. Set any of them in `.env` and it takes effect; `photosort doctor` prints
+port — live in `mediasort/config/env.py`, which is the one place they are written
+down. Set any of them in `.env` and it takes effect; `mediasort doctor` prints
 which `.env` and which saved settings are in force.
 
 ### Ollama
 
-Nothing is started for you: photosort talks to the Ollama you already run, at
-`PHOTOSORT_OLLAMA_URL`. The Settings tab has a **Test** button that lists the
+Nothing is started for you: mediasort talks to the Ollama you already run, at
+`MEDIASORT_OLLAMA_URL`. The Settings tab has a **Test** button that lists the
 models actually installed there, which is the quickest way to confirm the URL and
-pick a model — or use `photosort doctor`.
+pick a model — or use `mediasort doctor`.
 
 Anything vision-capable works. `llava-llama3` is the default; `qwen2.5-vl` and
 `llama3.2-vision` follow the JSON schema more reliably if you want to pull one:
@@ -218,7 +218,7 @@ make install-cpu                   # or no GPU at all
 The older `cu124` index publishes nothing for Python 3.13+, so on a recent
 interpreter it fails to resolve rather than falling back — pick `cu128` or later.
 
-`photosort doctor` reports which device torch actually chose. Detection falls
+`mediasort doctor` reports which device torch actually chose. Detection falls
 back to the CPU on its own — correct, just slower.
 
 ## Rules
@@ -227,8 +227,8 @@ A rule has a **name**, a **condition** and an **action**. They are evaluated top
 to bottom and **the first match wins**, so the most specific rule goes first and
 the last one should match anything.
 
-The file lives at `PHOTOSORT_RULES` (`./data/rules.json`). Nothing creates it for
-you — run `photosort rules init --classes cat,dog,video` once, which writes one
+The file lives at `MEDIASORT_RULES` (`./data/rules.json`). Nothing creates it for
+you — run `mediasort rules init --classes cat,dog,video` once, which writes one
 combined rule, one per class, one catch-all:
 
 ```jsonc
@@ -301,15 +301,15 @@ wins whichever of these it set explicitly.
 **Actions** — see [The four actions](#the-four-actions).
 
 Whatever classes your rules mention is what the detector looks for — there is no
-second list to keep in sync. `photosort rules classes` lists everything the model
+second list to keep in sync. `mediasort rules classes` lists everything the model
 can find (80 COCO classes with the default weights).
 
 After editing rules, you do **not** need to re-run the detector:
 
 ```bash
-photosort apply --dry-run   # what would happen
-photosort recheck           # re-decide every image from stored detections
-photosort apply             # do it
+mediasort apply --dry-run   # what would happen
+mediasort recheck           # re-decide every image from stored detections
+mediasort apply             # do it
 ```
 
 ### The four actions
@@ -357,7 +357,7 @@ about is the one thing doubt must not lead to unattended.
 Because the default is `move`, and moving needs a confirmation, a fresh install
 surfaces nothing into `_Review` until you pass `--yes` (or tick the confirm
 checkbox in the UI) — it says so. Uncertain photos are still flagged in the
-index either way, and `photosort stats` counts them.
+index either way, and `mediasort stats` counts them.
 
 ### Moving instead of copying
 
@@ -384,7 +384,7 @@ Like deletion, moving needs one confirmation:
 
 1. `--yes` on the command line (or the checkbox in the UI)
 
-Preview with `photosort apply --dry-run` first; it lists every source and
+Preview with `mediasort apply --dry-run` first; it lists every source and
 destination without touching anything.
 
 ### Deleting
@@ -398,11 +398,11 @@ photos are as writable to it as they are to any program you start. There is no
 read-only mount underneath making a mistake impossible, which is the tradeoff for
 being able to point at any folder without reconfiguring anything.
 
-Files are always *moved* to `PHOTOSORT_TRASH_FOLDER`, keeping their folder
+Files are always *moved* to `MEDIASORT_TRASH_FOLDER`, keeping their folder
 structure, so a mistake is recoverable — there is no permanent-delete mode.
-Every deletion is recorded — see `photosort history`.
+Every deletion is recorded — see `mediasort history`.
 
-Always run `photosort apply --dry-run` first.
+Always run `mediasort apply --dry-run` first.
 
 ## Web UI
 
@@ -443,45 +443,45 @@ Saving in Settings applies immediately: the server re-reads every layer and
 rebuilds itself, no restart. It refuses while a job is running, since a stage
 holding settings that just changed underneath it would be working from two
 configurations at once. It writes the same `data/settings.json` that
-`photosort config set` writes, so the two front ends cannot disagree — and until
+`mediasort config set` writes, so the two front ends cannot disagree — and until
 photo folders are set, the Run tab says so instead of letting you scan nothing.
 
 It is unauthenticated by design — it edits your settings and can delete your
-files. Keep `PHOTOSORT_WEB_HOST` on `127.0.0.1`.
+files. Keep `MEDIASORT_WEB_HOST` on `127.0.0.1`.
 
 ## Commands
 
 ```
-photosort scan            index new / changed images (safe to re-run any time)
-photosort run             full pipeline: scan, all three passes, apply  [--yes]
-photosort detect          detection pass only              [--limit N]
-photosort adjudicate      second opinion on the unsure ones [--limit N]
-photosort analyze         semantic pass only               [--limit N]
-photosort apply           execute the rule actions   [--dry-run] [--yes]
-photosort recheck         re-decide from stored evidence (no GPU, no Ollama)
+mediasort scan            index new / changed images (safe to re-run any time)
+mediasort run             full pipeline: scan, all three passes, apply  [--yes]
+mediasort detect          detection pass only              [--limit N]
+mediasort adjudicate      second opinion on the unsure ones [--limit N]
+mediasort analyze         semantic pass only               [--limit N]
+mediasort apply           execute the rule actions   [--dry-run] [--yes]
+mediasort recheck         re-decide from stored evidence (no GPU, no Ollama)
 
-photosort config show     the folders and Ollama settings, and their source
-photosort config set      save them   [--input F] [--output F] [--ollama-url U]
-photosort config unset    hand a setting back to .env or the default
+mediasort config show     the folders and Ollama settings, and their source
+mediasort config set      save them   [--input F] [--output F] [--ollama-url U]
+mediasort config unset    hand a setting back to .env or the default
 
-photosort rules show      the active rules, in evaluation order
-photosort rules init      write a starter file        [--classes cat,dog,bird]
-photosort rules validate  check it parses         [--check-classes]
-photosort rules actions   what a rule can do
-photosort rules classes   what the detector can find
-photosort web             rules editor + control panel     [--port N]
+mediasort rules show      the active rules, in evaluation order
+mediasort rules init      write a starter file        [--classes cat,dog,bird]
+mediasort rules validate  check it parses         [--check-classes]
+mediasort rules actions   what a rule can do
+mediasort rules classes   what the detector can find
+mediasort web             rules editor + control panel     [--port N]
 
-photosort stats           per-stage progress and category counts
-photosort doctor          GPU, weights, rules, Ollama connectivity
-photosort verify          confirm originals and links still exist
-photosort duplicates      files sharing a SHA256 hash
-photosort history         originals that were moved or removed
-photosort search TERM     free-text search over the Ollama metadata
+mediasort stats           per-stage progress and category counts
+mediasort doctor          GPU, weights, rules, Ollama connectivity
+mediasort verify          confirm originals and links still exist
+mediasort duplicates      files sharing a SHA256 hash
+mediasort history         originals that were moved or removed
+mediasort search TERM     free-text search over the Ollama metadata
 
-photosort retry           requeue failed  [--stage detect|adjudicate|analyze]
-photosort reset STAGE     reprocess      detect | adjudicate | analyze | all
-photosort clean           --links | --missing | --vacuum
-photosort export          dump the index               [--format json|csv]
+mediasort retry           requeue failed  [--stage detect|adjudicate|analyze]
+mediasort reset STAGE     reprocess      detect | adjudicate | analyze | all
+mediasort clean           --links | --missing | --vacuum
+mediasort export          dump the index               [--format json|csv]
 ```
 
 There is no separate `resume` command because there is no separate resume
@@ -585,7 +585,7 @@ action_log     image_id, action, detail, created_at
 `category` is the name of the rule that matched and `action` is what it asked
 for. Because raw detections are stored down to the *review* threshold rather
 than the decision threshold, and verdicts are kept beside them rather than
-overwriting them, changing rules or thresholds only needs `photosort recheck` —
+overwriting them, changing rules or thresholds only needs `mediasort recheck` —
 neither model runs twice.
 
 `detect_state` / `adjudicate_state` / `analyze_state` are `0 pending, 1 running,
@@ -597,7 +597,7 @@ pass can tell "settled" from "still waiting on a verdict" and never writes off a
 photo the second opinion is about to rescue from `ignore`.
 
 Stages claim rows with an atomic `UPDATE`, so they never collide on the same
-image. Run one photosort instance at a time per database: each stage resets rows
+image. Run one mediasort instance at a time per database: each stage resets rows
 left in `running` at startup, which assumes any previous run is dead rather than
 concurrent.
 
@@ -686,8 +686,8 @@ neither your `.env` nor your saved settings can reach them.
 - `hundreds of thousands of images` is the design target: SQLite with WAL
   handles it comfortably, and the sorter holds one entry per *sorted* image in
   memory (only the pet photos, not the whole library).
-- The database lives at `PHOTOSORT_DB` (`./data` by default). Back that up rather
+- The database lives at `MEDIASORT_DB` (`./data` by default). Back that up rather
   than the output tree — the output tree can always be rebuilt with
-  `photosort apply`.
-- Run one photosort at a time per database. The web UI runs one job at a time by
+  `mediasort apply`.
+- Run one mediasort at a time per database. The web UI runs one job at a time by
   construction; a CLI command started alongside it is not coordinated with it.

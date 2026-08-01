@@ -9,13 +9,13 @@ from __future__ import annotations
 
 import pytest
 
-from photosort.analyzing.contract import (build_verdict_prompt, build_verdict_schema,
+from app.analyzing.contract import (build_verdict_prompt, build_verdict_schema,
                                           parse_verdict_reply)
-from photosort.domain.adjudication import (ABSENT, PRESENT, UNSURE, Adjudication, adjudicated,
+from app.domain.adjudication import (ABSENT, PRESENT, UNSURE, Adjudication, adjudicated,
                                            uncertain_classes)
-from photosort.domain.decision import decide
-from photosort.domain.detection import Detection
-from photosort.domain.rules import HasClass, Rule, RuleSet
+from app.domain.decision import decide
+from app.domain.detection import Detection
+from app.domain.rules import HasClass, Rule, RuleSet
 
 CONF, REVIEW = 0.65, 0.35
 

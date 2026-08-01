@@ -1,11 +1,11 @@
 # Concepts
 
-What photosort does, the tools it leans on, and why the pipeline is shaped the
+What mediasort does, the tools it leans on, and why the pipeline is shaped the
 way it is. For "which file does this" see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## The elevator pitch
 
-Point photosort at a folder of photos. It finds the ones containing whatever
+Point mediasort at a folder of photos. It finds the ones containing whatever
 *you* define — a cat, a dog, a person, a receipt, anything an object detector
 can recognize — and does whatever *you* decide with them: copy into a folder,
 move, delete, or leave alone. Everything runs on your machine, against a
@@ -39,7 +39,7 @@ flowchart LR
 
 Solid arrows are the path every photo takes. Dashed arrows are the **semantic
 pass** — optional, and off to the side: it writes a description used by
-`photosort search`, and never changes where a photo ends up.
+`mediasort search`, and never changes where a photo ends up.
 
 The index (a local SQLite database) is what makes every stage resumable.
 Every image has a small state machine per stage — pending, running, done,
@@ -58,7 +58,7 @@ hardware) and narrow: it only knows the ~80 classes its weights were trained
 on (or however many a custom model was trained for). It has no idea what a
 "birthday party" is; it only knows objects.
 
-photosort loads one YOLO model and runs every photo through it in batches —
+mediasort loads one YOLO model and runs every photo through it in batches —
 that batching, not the model itself, is most of the throughput. A whole
 library's detection pass typically takes minutes, not hours.
 
@@ -82,7 +82,7 @@ Two thresholds decide what a detection means:
 ## The second opinion: adjudication
 
 Ollama's vision models are slower and much more general than YOLO — they can
-be *asked* a question about an image, not just report fixed classes. photosort
+be *asked* a question about an image, not just report fixed classes. mediasort
 uses that for exactly one narrow job: for a photo with a borderline
 detection, show it to Ollama and ask, in plain language, "is there really a
 cat in this picture?" The model answers one of three things:
@@ -130,13 +130,13 @@ second opinion) reported.
 **Rules decide what the detector looks for, not the other way around.** The
 detector is asked only for classes at least one rule mentions, and the
 semantic pass only describes those same classes. Add `bird` to a rule and
-photosort asks YOLO for `bird` and Ollama for `bird_count`/`bird_kinds` —
+mediasort asks YOLO for `bird` and Ollama for `bird_count`/`bird_kinds` —
 there is no second list to keep in sync.
 
 **Rules run twice** for any photo that gets a second opinion: once right
 after detection (which is enough to decide most photos immediately), and
 again after adjudication, using whatever the verdict changed. A rule edit
-alone triggers neither model — `photosort recheck` replays the *stored*
+alone triggers neither model — `mediasort recheck` replays the *stored*
 detections and verdicts against the current rules, instantly and without a
 GPU, which is why editing a rule is cheap to try.
 
@@ -179,11 +179,11 @@ those are gone by definition).
 Independent of everything above, Ollama can also be asked to just *describe*
 a photo it was already sorted into a category — how many of the subject,
 what kind/breed, what they're doing, indoor or out, a quality score. That
-goes into the index purely so `photosort search "maine coon"` can find it
+goes into the index purely so `mediasort search "maine coon"` can find it
 later; no rule ever depends on it, and it always runs — there is no switch
 for it. It is also the slowest pass by far — one Ollama request per photo,
 seconds each — so a first pass over a large library commonly runs detection
-only (`photosort run --no-analyze`), then analysis later or in the
+only (`mediasort run --no-analyze`), then analysis later or in the
 background.
 
 ## One photo's journey

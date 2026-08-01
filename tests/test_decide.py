@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from photosort.domain.decision import decide
-from photosort.domain.rules import Always, HasClass, Rule, RuleSet
+from app.domain.decision import decide
+from app.domain.rules import Always, HasClass, Rule, RuleSet
 from tests.conftest import detection
 
 def run(detections, ruleset):

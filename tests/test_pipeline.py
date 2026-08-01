@@ -9,14 +9,14 @@ from __future__ import annotations
 
 import pytest
 
-from photosort.domain.adjudication import ABSENT, PRESENT, UNSURE, Adjudication
-from photosort.domain.detection import Detection
-from photosort.domain.rules import RuleSet
-from photosort.errors import VisionError
-from photosort.pipeline import (Stopper, run_adjudicate_stage, run_analyze_stage,
+from app.domain.adjudication import ABSENT, PRESENT, UNSURE, Adjudication
+from app.domain.detection import Detection
+from app.domain.rules import RuleSet
+from app.errors import VisionError
+from app.pipeline import (Stopper, run_adjudicate_stage, run_analyze_stage,
                                 run_detect_stage, run_pipeline)
-from photosort.services import library
-from photosort.storage import DONE, ERROR, SKIPPED, Stage
+from app.services import library
+from app.storage import DONE, ERROR, SKIPPED, Stage
 
 CAT = Detection("cat", 0.95, 0, 0, 10, 10)
 #: In the review band (0.35–0.65): kept, flagged, but not a match on its own.
@@ -249,7 +249,7 @@ def test_a_fatal_stage_stops_the_others():
 
 
 def test_a_non_fatal_stage_failing_keeps_the_others_results():
-    from photosort.pipeline import StageStats
+    from app.pipeline import StageStats
 
     stopper = Stopper()
 
@@ -387,7 +387,7 @@ def test_the_semantic_pass_waits_for_a_verdict_before_writing_a_photo_off(indexe
 
 def test_a_verdict_survives_a_rule_edit(indexed, cats):
     """`recheck` replays stored verdicts, so escalation is paid for once."""
-    from photosort.services import processing
+    from app.services import processing
 
     _detect_as(indexed, cats, MAYBE_CAT)
     run_adjudicate_stage(

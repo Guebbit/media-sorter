@@ -6,11 +6,11 @@ import sqlite3
 
 import pytest
 
-from photosort.domain.decision import Decision
-from photosort.domain.detection import Detection
-from photosort.errors import IncompatibleIndex
-from photosort.services import library
-from photosort.storage import (DONE, ERROR, PENDING, RUNNING, SKIPPED, SCHEMA_VERSION, Stage,
+from app.domain.decision import Decision
+from app.domain.detection import Detection
+from app.errors import IncompatibleIndex
+from app.services import library
+from app.storage import (DONE, ERROR, PENDING, RUNNING, SKIPPED, SCHEMA_VERSION, Stage,
                                Storage)
 
 CAT = Detection("cat", 0.9, 1, 2, 3, 4)

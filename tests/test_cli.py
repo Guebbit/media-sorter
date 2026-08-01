@@ -11,10 +11,10 @@ import json
 import pytest
 from typer.testing import CliRunner
 
-from photosort.domain.decision import Decision
-from photosort.domain.detection import Detection
-from photosort.interfaces.cli import app
-from photosort.services import library
+from app.domain.decision import Decision
+from app.domain.detection import Detection
+from app.interfaces.cli import app
+from app.services import library
 
 runner = CliRunner()
 
@@ -22,7 +22,7 @@ runner = CliRunner()
 def invoke(*args):
     result = runner.invoke(app, list(args))
     if result.exit_code not in (0, 1, 2):
-        raise AssertionError(f"photosort {' '.join(args)} crashed:\n{result.output}\n{result.exception}")
+        raise AssertionError(f"app {' '.join(args)} crashed:\n{result.output}\n{result.exception}")
     return result
 
 
@@ -56,7 +56,7 @@ def test_scan(env):
 
 def test_scan_takes_the_folders_from_a_flag(env, tmp_path, storage):
     """The one-run override: this folder, not the saved one, and nothing persisted."""
-    from photosort.config import load_settings, overrides, settings_file
+    from app.config import load_settings, overrides, settings_file
     from tests.conftest import make_image
 
     elsewhere = tmp_path / "elsewhere"
@@ -72,10 +72,10 @@ def test_scan_takes_the_folders_from_a_flag(env, tmp_path, storage):
 
 
 def test_scan_without_folders_explains_itself(env, monkeypatch):
-    from photosort.config import overrides, settings_file
+    from app.config import overrides, settings_file
 
     overrides.clear(settings_file(), ["INPUT_FOLDERS"])
-    monkeypatch.setenv("PHOTOSORT_INPUT_FOLDERS", "/stale/export")  # must not rescue it
+    monkeypatch.setenv("MEDIASORT_INPUT_FOLDERS", "/stale/export")  # must not rescue it
 
     result = invoke("scan")
 
@@ -93,7 +93,7 @@ def test_config_show_reports_the_folders_and_their_layer(env, library_root, monk
 
 
 def test_config_set_persists_for_later_commands(env, tmp_path):
-    from photosort.config import load_settings
+    from app.config import load_settings
     from tests.conftest import make_image
 
     elsewhere = tmp_path / "elsewhere"
@@ -120,7 +120,7 @@ def test_config_set_needs_something_to_set(env):
 
 
 def test_config_unset_hands_a_folder_back(env):
-    from photosort.config import load_settings
+    from app.config import load_settings
 
     assert invoke("config", "unset", "INPUT_FOLDERS").exit_code == 0
     assert load_settings().library.input_folders == ()

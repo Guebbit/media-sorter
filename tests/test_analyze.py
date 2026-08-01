@@ -11,10 +11,10 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 from PIL import Image
 
-from photosort.analyzing import OllamaClient, build_schema
-from photosort.config import load_settings
-from photosort.domain.adjudication import ABSENT, PRESENT, Adjudication
-from photosort.errors import VisionError
+from app.analyzing import OllamaClient, build_schema
+from app.config import load_settings
+from app.domain.adjudication import ABSENT, PRESENT, Adjudication
+from app.errors import VisionError
 
 
 class FakeOllama:
@@ -68,7 +68,7 @@ def fake_ollama():
 
 @pytest.fixture
 def client(env, fake_ollama, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", fake_ollama.url)
+    monkeypatch.setenv("MEDIASORT_OLLAMA_URL", fake_ollama.url)
     return OllamaClient(load_settings().analyze, ["cat", "dog"])
 
 
@@ -110,20 +110,20 @@ def test_bare_name_resolves_to_the_installed_tag(client):
 
 
 def test_exact_tag_is_kept(env, fake_ollama, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", fake_ollama.url)
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_MODEL", "llava:13b")
+    monkeypatch.setenv("MEDIASORT_OLLAMA_URL", fake_ollama.url)
+    monkeypatch.setenv("MEDIASORT_OLLAMA_MODEL", "llava:13b")
     assert OllamaClient(load_settings().analyze).ensure_model() == "llava:13b"
 
 
 def test_missing_model_is_reported(env, fake_ollama, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", fake_ollama.url)
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_MODEL", "qwen2.5-vl")
+    monkeypatch.setenv("MEDIASORT_OLLAMA_URL", fake_ollama.url)
+    monkeypatch.setenv("MEDIASORT_OLLAMA_MODEL", "qwen2.5-vl")
     with pytest.raises(VisionError, match="not found"):
         OllamaClient(load_settings().analyze).ensure_model()
 
 
 def test_unreachable_server_raises(env, monkeypatch):
-    monkeypatch.setenv("PHOTOSORT_OLLAMA_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("MEDIASORT_OLLAMA_URL", "http://127.0.0.1:1")
     with pytest.raises(VisionError, match="not reachable"):
         OllamaClient(load_settings().analyze).wait_ready(timeout=0.1)
 

@@ -12,12 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from photosort.actions import NameAllocator, PlannedAction
-from photosort.actions.registry import default_registry
-from photosort.domain.decision import Decision
-from photosort.domain.rules import Always, HasClass, InDoubt, Rule, RuleSet
-from photosort.domain.rules.ruleset import DOUBT_RULE_NAME, doubt_rule
-from photosort.services import applying, library, maintenance
+from app.actions import NameAllocator, PlannedAction
+from app.actions.registry import default_registry
+from app.domain.decision import Decision
+from app.domain.rules import Always, HasClass, InDoubt, Rule, RuleSet
+from app.domain.rules.ruleset import DOUBT_RULE_NAME, doubt_rule
+from app.services import applying, library, maintenance
 
 
 def _id_of(ctx, filename):
@@ -185,13 +185,13 @@ def test_name_collisions_are_disambiguated_stably():
 
 
 def test_probe_passes_for_a_writable_folder(tmp_path):
-    from photosort import filesystem
+    from app import filesystem
 
     assert filesystem.unwritable(tmp_path / "out") is None
 
 
 def test_probe_leaves_nothing_behind(tmp_path):
-    from photosort import filesystem
+    from app import filesystem
 
     out = tmp_path / "out"
     filesystem.unwritable(out)
@@ -199,7 +199,7 @@ def test_probe_leaves_nothing_behind(tmp_path):
 
 
 def test_probe_reports_a_folder_it_cannot_write_to(tmp_path):
-    from photosort import filesystem
+    from app import filesystem
 
     out = tmp_path / "out"
     out.mkdir()
@@ -213,7 +213,7 @@ def test_probe_reports_a_folder_it_cannot_write_to(tmp_path):
 def test_apply_fails_once_instead_of_per_photo(populated, ruleset):
     """The complaint this answers: one warning per photo, thousands of them,
     all saying the same thing about the same folder."""
-    from photosort.errors import OutputNotWritable
+    from app.errors import OutputNotWritable
 
     output = populated.settings.output.folder
     output.mkdir(parents=True, exist_ok=True)
@@ -388,7 +388,7 @@ def test_unknown_action_is_a_clear_error():
 
 def test_a_new_action_needs_no_changes_elsewhere(populated):
     """The extension point: register a class, use it from a rule."""
-    from photosort.actions import Action
+    from app.actions import Action
 
     seen: list[str] = []
 
