@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 
 import pytest
 
 from app.domain.decision import Decision
 from app.domain.detection import Detection
-from app.errors import IncompatibleIndex
+
 from app.services import library
 from app.storage import (DONE, ERROR, PENDING, RUNNING, SKIPPED, SCHEMA_VERSION, Stage,
                                Storage)
@@ -149,9 +150,10 @@ def test_a_failed_nested_write_rolls_the_whole_thing_back(indexed):
     assert indexed.images.count("category IS NULL") == before
 
 
-def test_an_index_from_an_older_schema_is_refused_with_instructions(tmp_path):
-    """The index is a rebuildable cache, so an old one errors instead of
-    being half-migrated into something subtly wrong."""
+def test_an_index_from_an_older_schema_is_rebuilt_not_refused(tmp_path):
+    """The index is a rebuildable cache, so an old one is thrown away and
+    recreated rather than half-migrated — or, worse, turned into an error the
+    user has to read and act on before they can sort any photos."""
     path = tmp_path / "old.db"
     legacy = sqlite3.connect(path)
     legacy.executescript(
@@ -159,13 +161,22 @@ def test_an_index_from_an_older_schema_is_refused_with_instructions(tmp_path):
         CREATE TABLE images (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE);
         CREATE TABLE schema_info (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         INSERT INTO schema_info VALUES ('version', '2');
+        INSERT INTO images (path) VALUES ('/gone.jpg');
         """
     )
     legacy.commit()
     legacy.close()
 
-    with pytest.raises(IncompatibleIndex, match="re-run"):
-        Storage(path).init()
+    storage = Storage(path)
+    storage.init()
+
+    # Usable straight away, on the current schema, with the stale rows gone.
+    assert storage.images.count("") == 0
+    assert storage.engine.conn.execute(
+        "SELECT value FROM schema_info WHERE key='version'"
+    ).fetchone()[0] == SCHEMA_VERSION
+    # A v2 `images` table had no `phash`; the rebuilt one does.
+    assert "phash" in {r["name"] for r in storage.engine.conn.execute("PRAGMA table_info(images)")}
 
 
 def test_a_fresh_file_is_not_mistaken_for_an_old_one(tmp_path):
@@ -182,3 +193,31 @@ def test_init_is_idempotent(settings):
         "SELECT value FROM schema_info WHERE key='version'"
     ).fetchone()[0]
     assert stored == SCHEMA_VERSION
+
+
+def test_a_read_on_another_thread_survives_a_write_in_flight():
+    """The default in-memory index is shared-cache, which locks per *table* and
+    refuses a conflicting read outright instead of waiting out `busy_timeout`.
+    The web UI polls stats from its own thread while the stages write, so that
+    read has to come back rather than raising "database table is locked"."""
+    storage = Storage(None)
+    storage.init()
+    assert not storage.engine.persistent
+    result: list[object] = []
+
+    def read() -> None:
+        try:
+            result.append(storage.images.count("deleted = 1"))
+        except BaseException as exc:  # noqa: BLE001 - the regression itself
+            result.append(exc)
+
+    with storage.engine.write() as conn:
+        # Any statement that takes the write lock on `images` will do; the
+        # reader below contends with the lock, not with the rows.
+        conn.execute("UPDATE images SET deleted = 1")
+        reader = threading.Thread(target=read)
+        reader.start()
+        reader.join(timeout=10)
+
+    assert not reader.is_alive(), "the read hung"
+    assert result and not isinstance(result[0], BaseException), result

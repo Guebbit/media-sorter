@@ -8,9 +8,18 @@
   :root {
     --bg:#12141a; --panel:#1a1d26; --line:#2b3040; --text:#e6e8ef; --dim:#8b93a7;
     --accent:#5b9dff; --warn:#ffb454; --danger:#ff6b6b; --ok:#4ade80; --radius:10px;
+    /* Text laid *on* the accent, which flips with it: dark ink on the dark
+       theme's pale blue, white on the light theme's deep one. */
+    --on-accent:#08101f;
   }
   @media (prefers-color-scheme: light) {
-    :root { --bg:#f5f6f9; --panel:#fff; --line:#e2e5ec; --text:#1b1e26; --dim:#6b7280; }
+    /* The status colours are re-picked, not just the greys: the dark theme's
+       are pastels chosen to glow on #12141a, and every one of them lands under
+       3:1 against white — #ffb454 text on a white panel is barely there. These
+       are the same hues dropped to a legible lightness. */
+    :root { --bg:#f5f6f9; --panel:#fff; --line:#e2e5ec; --text:#1b1e26; --dim:#6b7280;
+            --accent:#1d63d1; --warn:#8a5300; --danger:#c02626; --ok:#15803d;
+            --on-accent:#fff; }
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
@@ -28,7 +37,7 @@
            background:var(--panel); color:var(--text); cursor:pointer; }
   button:hover:not(:disabled) { border-color:var(--accent); }
   button:disabled { opacity:.45; cursor:not-allowed; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#08101f; font-weight:600; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
   button.danger { border-color:var(--danger); color:var(--danger); }
   button.small { padding:3px 8px; font-size:12px; }
   input, select { font:inherit; padding:6px 9px; border-radius:8px;
@@ -60,15 +69,28 @@
   textarea { width:100%; min-height:340px; font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
              background:var(--bg); color:var(--text); border:1px solid var(--line);
              border-radius:8px; padding:12px; }
+  nav a { color:var(--dim); text-decoration:none; font-size:13px; padding:6px 12px;
+          border:1px solid var(--line); border-radius:8px; }
+  nav a:hover { border-color:var(--accent); color:var(--text); }
+  nav a.here { color:var(--text); border-color:var(--accent); font-weight:600; }
   .tabs { display:flex; gap:4px; margin-bottom:16px; border-bottom:1px solid var(--line); }
   .tabs button { border:none; background:none; border-bottom:2px solid transparent;
                  border-radius:0; color:var(--dim); padding:8px 14px; }
   .tabs button.active { color:var(--text); border-bottom-color:var(--accent); }
   .hidden { display:none; }
-  .warn-box { border:1px solid var(--warn); color:var(--warn); border-radius:8px;
+  /* Tinted rather than outlined-only: a bare coloured border makes the box's
+     own text carry all the emphasis, which forces a saturated colour that then
+     has to stay readable as body text. The wash does the signalling, so the
+     text can sit at whatever contrast it needs. */
+  .warn-box { border:1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+              background:color-mix(in srgb, var(--warn) 12%, var(--panel));
+              color:var(--warn); border-radius:8px;
               padding:10px 12px; font-size:13px; margin-bottom:14px; }
+  .warn-box code, .warn-box b { color:var(--text); }
   /* A blocking problem, as opposed to something merely worth knowing. */
-  .warn-box.blocking { border-color:var(--danger); color:var(--danger); }
+  .warn-box.blocking { border-color:color-mix(in srgb, var(--danger) 45%, transparent);
+                       background:color-mix(in srgb, var(--danger) 12%, var(--panel));
+                       color:var(--danger); }
   .scroll { max-height:330px; overflow-y:auto; }
   code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
   .explain summary { cursor:pointer; color:var(--dim); font-size:13px; font-weight:600;
@@ -141,6 +163,7 @@
   @media (prefers-reduced-motion:reduce) {
     .spin { animation:none; } .prog-fill { transition:none; }
   }
+
 </style>
 </head>
 <body>
@@ -148,7 +171,19 @@
   <h1>mediasort</h1>
   <span class="sub" id="meta-line">loading…</span>
   <span class="spacer"></span>
+  <!-- Links, not tabs: the two are separate pages over separate folders. Both
+       are listed on both, so the pair reads the same way from either side. -->
+  <nav>
+    <a href="/" class="here">Sort</a>
+    <a href="/duplicates">Duplicates</a>
+  </nav>
   <span class="status" id="job-status"></span>
+  <!-- The three Run-tab steps in one press. Up here because it is a shortcut to
+       the whole tab, not one more button inside it. -->
+  <button class="primary" id="btn-run-all"
+          title="Scan the folders, examine every new photo, then sort them — the three steps of the Run tab, one after the other.">
+    Run everything
+  </button>
 </header>
 
 <main>
@@ -179,7 +214,6 @@
     <div id="no-folders-warning" class="warn-box hidden"></div>
     <div id="output-warning" class="warn-box blocking hidden"></div>
     <div id="ollama-warning" class="warn-box hidden"></div>
-    <div id="delete-warning" class="warn-box hidden"></div>
 
     <!-- The folders live here as well as in Settings: they are the first thing
          this tab needs and the one setting a run cannot start without. Both write
@@ -192,7 +226,8 @@
       </div>
       <div class="folder-row">
         <label>Output folder<span class="muted"> — where the sorted links are written</span></label>
-        <div class="cond"><input id="run-output-folder" size="52" placeholder="defaults to <first photo folder>/Sorted"></div>
+        <div class="cond"><input id="run-output-folder" size="52"></div>
+        <div class="muted" id="run-output-hint" style="margin-top:4px"></div>
       </div>
       <div class="cond" style="margin-top:4px">
         <button class="primary" id="btn-save-folders">Save folders</button>
@@ -214,6 +249,12 @@
       <h2>Progress</h2>
       <div id="progress-bars"></div>
     </div>
+
+    <p class="muted">
+      The three steps below run in order, and each one is safe to repeat.
+      <strong>Run everything</strong>, top right, does all three in one press —
+      the same work, without waiting to click between them.
+    </p>
 
     <!-- One card per step, each with its own state and its own result line: a
          shared status line somewhere else on the page is why a step that says
@@ -267,12 +308,11 @@
           <!-- Label filled in from the actions actually enabled: it used to say
                "confirm deletions" always, so a library configured only to move
                had a box nobody had any reason to tick. -->
-          <label class="muted" id="confirm-label" hidden><input type="checkbox" id="confirm-consuming"> <span></span></label>
         </div>
         <div class="step-why">
           Carries out what step 2 decided: creates the links in the output folder, and
           runs the actions that touch your originals — <code>move</code> and
-          <code>delete</code> — only if you have enabled <em>and</em> confirmed them.
+          <code>delete</code> — whenever a rule asks for them.
           Photos whose action is <code>ignore</code> produce nothing — that is what the
           action means, and it is why this step can finish with nothing to do. Running it
           twice creates nothing the second time.
@@ -324,11 +364,10 @@
           <tr><td><code>copy</code></td>
               <td>Put a duplicate of the photo in its folder. The original stays put.</td></tr>
           <tr><td><code>move</code></td>
-              <td>Put the photo itself in its folder — nothing left behind. Needs the
-                  confirm checkbox below.</td></tr>
+              <td>Put the photo itself in its folder — nothing left behind.</td></tr>
           <tr><td><code>delete</code></td>
-              <td>The original goes to the trash folder instead of a category folder.
-                  Needs the confirm checkbox below.</td></tr>
+              <td>The original goes to the trash folder instead of a category
+                  folder.</td></tr>
           <tr><td><code>_Review</code></td>
               <td>Where the built-in <b>in doubt</b> rule sends a photo nobody could
                   settle, instead of a category folder. With the second opinion on, a
@@ -396,6 +435,8 @@
       </div>
     </details>
   </section>
+
+  <!-- ---------------------------------------------------- DUPLICATES -->
 
   <!-- ------------------------------------------------------- SETTINGS -->
   <section id="tab-settings" class="hidden">
@@ -742,27 +783,13 @@ async function loadMeta() {
     + `indoors or out — using <code>${META.config.ollama_model}</code>. It is slow (seconds `
     + `per photo, against dozens per second for the detector), it only runs on photos the `
     + `rules did not <code>ignore</code>, and it never changes which photo goes where.`;
-
-  // move and delete both consume originals and are always available actions —
-  // the checkbox below is the one gate left on either running.
-  const warn = $("#delete-warning");
-  warn.classList.remove("hidden");
-  warn.textContent =
-    `A rule with the move action relocates the original into `
-    + `${META.config.output_folder || "the output folder"}, leaving nothing behind. `
-    + `A rule with the delete action moves the original to ${META.config.trash_folder}.`;
-
-  const label = $("#confirm-label");
-  label.hidden = false;
-  label.querySelector("span").textContent = "confirm move and delete";
-  label.title = "Rules whose action is move or delete do nothing unless this is ticked.";
 }
 
 async function loadRules() {
   const data = await api("/api/rules");
   RULES = data.rules;
   renderRules();
-  $("#json-editor").value = JSON.stringify({ version: 1, rules: RULES }, null, 2);
+  $("#json-editor").value = JSON.stringify({ rules: RULES }, null, 2);
   setStatus("#rules-status", "");
 }
 
@@ -820,18 +847,13 @@ function settingControl(field) {
   if (field.kind === "bool") {
     const check = el("input", { type: "checkbox", checked: !!draft });
     check.onchange = () => { DRAFT[field.key] = check.checked; };
-    return el("label", { className: "muted" }, [check, " enabled"]);
+    return el("label", { className: "muted" }, [check, " on"]);
   }
 
-  if (field.kind === "number") {
-    const input = el("input", {
-      type: "number", value: draft ?? "", min: "0", max: "1", step: "0.01",
-    });
-    input.oninput = () => { DRAFT[field.key] = input.value; };
-    return input;
-  }
-
-  const input = el("input", { value: draft ?? "", size: 46 });
+  const input = el("input", {
+    value: draft ?? "", size: 46,
+    placeholder: field.placeholder ? "leave empty for " + field.placeholder : "",
+  });
   input.oninput = () => { DRAFT[field.key] = input.value; };
 
   if (field.kind === "url") {
@@ -916,6 +938,41 @@ function seedDraft() {
   });
 }
 
+const fieldOf = (key) => SETTINGS.fields.find((f) => f.key === key) || {};
+
+// A field with a placeholder has a value the settings derive, so an empty box
+// means "go back to that" — a reset rather than a value, which the API would
+// reject as empty. Splitting a draft into the two calls is the only difference
+// between the two forms that save one.
+function splitDraft(draft) {
+  const values = {}, reset = [];
+  Object.entries(draft).forEach(([key, value]) => {
+    if (fieldOf(key).placeholder && !String(value ?? "").trim()) reset.push(key);
+    else values[key] = value;
+  });
+  return { values, reset };
+}
+
+// Both save buttons: clear what was emptied, save the rest, and return the
+// settings as the server now has them.
+async function submitDraft(draft) {
+  const { values, reset } = splitDraft(draft);
+  let settings = SETTINGS;
+  if (reset.length) {
+    settings = await api("/api/settings/reset", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ keys: reset }),
+    });
+  }
+  if (Object.keys(values).length) {
+    settings = await api("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    });
+  }
+  return settings;
+}
+
 async function loadSettings() {
   SETTINGS = await api("/api/settings");
   seedDraft();
@@ -947,8 +1004,15 @@ function renderRunFolders() {
     el("span", { className: "muted", textContent: folders.length ? "" : "none set — add the folder your photos are in" })]));
 
   const out = $("#run-output-folder");
+  const field = fieldOf("OUTPUT_FOLDER");
   out.value = DRAFT.OUTPUT_FOLDER || "";
+  out.placeholder = field.placeholder ? "leave empty for " + field.placeholder : "";
   out.oninput = () => { DRAFT.OUTPUT_FOLDER = out.value; };
+  // Said under the box as well as in it: the placeholder disappears the moment
+  // anything is typed, and this is the line that answers "what if I clear it?".
+  $("#run-output-hint").textContent = field.placeholder
+    ? `Leave it empty and the sorted tree goes to ${field.placeholder}.`
+    : "";
 }
 
 async function saveFolders() {
@@ -959,21 +1023,9 @@ async function saveFolders() {
   }
   setStatus("#folders-status", "saving…");
   try {
-    const output = (DRAFT.OUTPUT_FOLDER || "").trim();
-    // An emptied output folder means "go back to the default", which is a reset
-    // rather than a value — otherwise the placeholder would be a lie.
-    if (!output) {
-      await api("/api/settings/reset", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ keys: ["OUTPUT_FOLDER"] }),
-      });
-    }
-    SETTINGS = await api("/api/settings", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        values: output ? { INPUT_FOLDERS: folders, OUTPUT_FOLDER: output }
-                       : { INPUT_FOLDERS: folders },
-      }),
+    SETTINGS = await submitDraft({
+      INPUT_FOLDERS: folders,
+      OUTPUT_FOLDER: (DRAFT.OUTPUT_FOLDER || "").trim(),
     });
     seedDraft();
     renderSettings();
@@ -1246,6 +1298,7 @@ function renderSteps(data) {
   }
 }
 
+// Resolved by `refreshStats`'s own poll cycle the next time it observes the
 async function refreshStats() {
   const data = await api("/api/stats");
   const p = data.pipeline;
@@ -1269,11 +1322,12 @@ async function refreshStats() {
   node.textContent = job.busy ? `${job.state}… ${duration(job.elapsed)}` : (job.error || job.message || "");
   node.className = "status " + (job.error ? "err" : job.busy ? "" : "ok");
   // The folder form is a settings write, which the server refuses mid-job.
-  document.querySelectorAll("#steps button, #btn-save-folders").forEach((b) => { b.disabled = job.busy; });
+  document.querySelectorAll("#steps button, #btn-save-folders, #btn-run-all")
+    .forEach((b) => { b.disabled = job.busy; });
 }
 
 /* ------------------------------------------------------------------ wire */
-$("#save-rules").onclick = () => saveRules({ version: 1, rules: RULES }, "#rules-status");
+$("#save-rules").onclick = () => saveRules({ rules: RULES }, "#rules-status");
 $("#reload-rules").onclick = loadRules;
 $("#add-rule").onclick = () => {
   RULES.splice(Math.max(0, RULES.length - 1), 0,
@@ -1292,12 +1346,10 @@ $("#reload-json").onclick = loadRules;
 $("#save-settings").onclick = async () => {
   setStatus("#settings-status", "saving…");
   try {
-    SETTINGS = await api("/api/settings", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ values: DRAFT }),
-    });
+    SETTINGS = await submitDraft(DRAFT);
     seedDraft();
     renderSettings();
+    renderRunFolders();
     setStatus("#settings-status", "saved and applied", "ok");
     await loadMeta();
   } catch (err) {
@@ -1316,14 +1368,27 @@ const startJob = async (path, body) => {
       setStatus("#job-status", "something else is still running — wait for it", "err");
     SAMPLES.length = 0;   // a new job restarts the throughput estimate
     refreshStats();
+    return res;
   } catch (err) {
     setStatus("#job-status", err.message, "err");
+    return { started: false };
   }
 };
 $("#btn-scan").onclick = () => startJob("/api/run/scan");
 $("#btn-pipeline").onclick = () => startJob("/api/run/pipeline", {});
-$("#btn-apply").onclick = () => startJob("/api/run/apply", { confirmed: $("#confirm-consuming").checked });
+$("#btn-apply").onclick = () => startJob("/api/run/apply");
 $("#btn-recheck").onclick = () => startJob("/api/run/recheck");
+// The shortcut: one job on the server that is the other three in order, so the
+// step cards and bars below light up as it moves, and closing the page does not
+// stop it halfway.
+$("#btn-run-all").onclick = () => {
+  showTab("run");   // where the progress it is about to make is shown
+  if (!(META.config.input_folders || []).length) {
+    setStatus("#job-status", "no input folders are set — add one below first", "err");
+    return;
+  }
+  return startJob("/api/run/all");
+};
 $("#btn-save-folders").onclick = saveFolders;
 $("#btn-reload-folders").onclick = async () => {
   await loadSettings();
@@ -1348,9 +1413,7 @@ $("#btn-preview").onclick = async () => {
     fillTable("#tbl-sample",
       data.sample.map((s) => [s.action, s.source, s.target || "—"]),
       ["action", "source", "target"]);
-    setStatus("#preview-status",
-      `${data.total} actions planned` +
-      (data.skipped_unconfirmed ? ` · ${data.skipped_unconfirmed} need confirming` : ""), "ok");
+    setStatus("#preview-status", `${data.total} actions planned`, "ok");
     if (!data.total) await explainEmptyPreview();
   } catch (err) {
     setStatus("#preview-status", err.message, "err");

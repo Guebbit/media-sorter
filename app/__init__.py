@@ -3,7 +3,7 @@
 The packages are layered, innermost first. Each may only import from the ones
 above it in this list:
 
-  errors, imaging, filesystem   cross-cutting basics
+  errors, imaging, video, filesystem   cross-cutting basics
   domain/       rules, decisions, value types — pure, no I/O, no dependencies
   config/       what the user chose, grouped by concern
   storage/      the SQLite index, one repository per table

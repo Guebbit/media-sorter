@@ -13,6 +13,7 @@ from pathlib import Path
 from .activity import ActivityLog
 from .adjudications import AdjudicationRepository
 from .detections import DetectionRepository
+from .dupes import DISCARD, KEEP, MARKS, DupeDismissals, DupeMarks
 from .engine import Engine
 from .images import ImageRepository, ImageRow
 from .links import LinkRepository
@@ -24,9 +25,10 @@ from .schema import SCHEMA_VERSION
 from .state import DONE, ERROR, PENDING, RUNNING, SKIPPED, Stage
 
 __all__ = [
-    "ActivityLog", "AdjudicationRepository", "DetectionRepository", "Engine",
-    "ImageRepository", "ImageRow", "LinkRepository", "MetadataRepository", "Reporting",
-    "ResultsWriter", "RulesStore", "SCHEMA_VERSION", "Stage", "Storage",
+    "ActivityLog", "AdjudicationRepository", "DISCARD", "DetectionRepository",
+    "DupeDismissals", "DupeMarks", "KEEP", "MARKS",
+    "Engine", "ImageRepository", "ImageRow", "LinkRepository", "MetadataRepository",
+    "Reporting", "ResultsWriter", "RulesStore", "SCHEMA_VERSION", "Stage", "Storage",
     "DONE", "ERROR", "PENDING", "RUNNING", "SKIPPED",
 ]
 
@@ -35,7 +37,8 @@ class Storage:
     """Every repository, wired to one shared `Engine` — the single object a
     caller holds to reach any table."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path | None):
+        """`path` None keeps the index in memory — see `Engine`."""
         self.engine = Engine(path)
         self.images = ImageRepository(self.engine)
         self.detections = DetectionRepository(self.engine)
@@ -47,14 +50,21 @@ class Storage:
         self.links = LinkRepository(self.engine)
         self.activity = ActivityLog(self.engine)
         self.reporting = Reporting(self.engine, self.images)
+        self.dupes = DupeDismissals(self.engine)
+        self.marks = DupeMarks(self.engine)
 
     @property
-    def path(self) -> Path:
-        """Where the SQLite file lives."""
+    def path(self) -> Path | None:
+        """Where the SQLite file lives, or None when this index is in memory."""
         return self.engine.path
 
+    @property
+    def persistent(self) -> bool:
+        """Whether this index outlives the run."""
+        return self.engine.persistent
+
     def init(self) -> None:
-        """Create or verify the schema. Raises `IncompatibleIndex` on an old file."""
+        """Create the schema, rebuilding the index first if it predates this build."""
         self.engine.init_schema()
 
     def close(self) -> None:

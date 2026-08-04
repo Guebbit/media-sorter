@@ -44,9 +44,10 @@ class ResultsWriter:
         which is what lets the description pass tell "settled" from "waiting".
 
         `skip_analyze` marks the semantic pass not applicable here and now,
-        rather than pending — for a video, say, which no vision model in this
-        pipeline can look at. `skip_analysis_for_ignored` would only catch it
-        later, and only if its rule's action happens to be `ignore`.
+        rather than pending — for a video no frame could be read from, say,
+        which leaves nothing for a vision model to describe.
+        `skip_analysis_for_ignored` would only catch it later, and only if its
+        rule's action happens to be `ignore`.
         """
         with self._engine.write() as conn:
             self._detections.replace_for_image(image_id, detections, model)

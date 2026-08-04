@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import pytest
 
+from app import filesystem
 from app.domain.decision import Decision
 from app.domain.detection import Detection
-from app.errors import ConfigError
+from app.errors import ConfigError, MediaSortError
 from app.interfaces.web import JobRunner, WebApi
-from app.services import library
+from app.pipeline.stages import StageStats
+from app.services import duplicates, library, processing
 from app.storage import RulesStore
 
 
@@ -82,7 +84,7 @@ def test_meta_exposes_actions_and_config(app, monkeypatch):
     assert "video" in meta["classes"]
     # The starter ruleset leaves every class band unset, which resolves to
     # `ollama_review=True` by default — so the fixture ruleset does ask for a
-    # second opinion, unlike the old global `ADJUDICATE_ENABLED=0` test default.
+    # second opinion.
     assert meta["config"]["adjudication_needed"] is True
 
 
@@ -158,10 +160,9 @@ def test_meta_reports_what_the_detector_looks_for(app):
     assert app.get_meta()["looking_for"] == ["cat", "dog"]
 
 
-def test_the_confirmation_covers_moves_and_not_only_deletions(app, tmp_path):
-    """The bug this pins: the UI's one checkbox was labelled "confirm deletions"
-    and wired to deletions only, so a library configured to move sorted nothing
-    and reported every photo as skipped."""
+def test_a_move_ruleset_sorts_without_being_confirmed(app, tmp_path):
+    """A library configured to move must actually move on an ordinary press of
+    Sort — nothing withheld, nothing reported as skipped."""
     app.put_rules({"rules": [
         {"name": "cat", "when": {"class": "cat"}, "action": "move"},
         {"name": "none", "when": {"always": True}, "action": "ignore"},
@@ -170,7 +171,7 @@ def test_the_confirmation_covers_moves_and_not_only_deletions(app, tmp_path):
     for row in app.ctx.storage.images.claim_detect(10):
         app.ctx.storage.results.finish_detect(row.id, [], Decision("cat", "move", False), "m")
 
-    assert app.start_apply(confirmed=True) is True
+    assert app.start_apply() is True
     app.jobs.join()
 
     snapshot = app.jobs.snapshot()
@@ -181,7 +182,7 @@ def test_the_confirmation_covers_moves_and_not_only_deletions(app, tmp_path):
 
 def test_apply_explains_itself_when_there_is_nothing_to_do(app):
     """The complaint this answers is "Apply actions does nothing"."""
-    assert app.start_apply(confirmed=False) is True
+    assert app.start_apply() is True
     app.jobs.join()
 
     snapshot = app.jobs.snapshot()
@@ -214,6 +215,51 @@ def test_a_finished_job_still_says_which_step_it_was(app, ctx):
     assert snapshot["elapsed"] >= 0
 
 
+def test_the_shortcut_runs_the_three_steps_and_reports_all_of_them(app, ctx, monkeypatch):
+    """"Run everything" is the three buttons in order, so its result has to
+    account for all three — a step that found nothing to do still says so."""
+    seen: list[str] = []
+    monkeypatch.setattr(
+        processing, "run_all",
+        lambda *a, **kw: (seen.append("pipeline"), {"detect": StageStats(processed=5)})[1],
+    )
+
+    assert app.start_everything() is True
+    app.jobs.join()
+
+    snapshot = app.jobs.snapshot()
+    assert snapshot["error"] == ""
+    assert seen == ["pipeline"]
+    assert "scan — scanned 5 files" in snapshot["message"]
+    assert "examine — detect: 5 examined" in snapshot["message"]
+    assert "sort — nothing to do" in snapshot["message"]
+
+
+def test_the_shortcut_renames_itself_so_the_page_follows_along(app, ctx, monkeypatch):
+    """The Run tab attributes bars and result lines by job name. A composite
+    job that kept one name of its own would render its progress nowhere."""
+    names: list[str] = []
+    monkeypatch.setattr(processing, "run_all",
+                        lambda *a, **kw: (names.append(app.jobs.name), {})[1])
+    monkeypatch.setattr(WebApi, "_apply", lambda self: names.append(self.jobs.name) or "")
+
+    app.start_everything()
+    app.jobs.join()
+
+    assert names == ["pipeline", "apply"]
+    # And it outlives the job, so the last step's result stays where it belongs.
+    assert app.jobs.snapshot()["name"] == "apply"
+
+
+def test_the_shortcut_will_not_start_on_top_of_a_running_job(app, ctx):
+    """One job at a time is the whole contract of `JobRunner`; a shortcut that
+    could be pressed alongside a run would break it from a second direction."""
+    library.scan_library(ctx)
+    assert app.start_scan() is True
+    assert app.start_everything() is False
+    app.jobs.join()
+
+
 def test_stats_say_whether_the_output_tree_exists_yet(app, ctx, storage):
     """"ready to apply" and "already applied" are different sentences."""
     from app.services import applying
@@ -236,6 +282,26 @@ def test_settings_report_their_value_and_layer(app, library_root):
     # Saved, never "from .env" — the environment is not a layer for a folder.
     assert fields["INPUT_FOLDERS"]["source"] == "settings"
     assert fields["OLLAMA_MODEL"]["kind"] == "text"
+
+
+def test_an_unset_output_folder_is_reported_empty_with_its_default_described(app, library_root):
+    """What the form shows for a folder nobody picked: nothing, plus a placeholder.
+
+    The resolved path would fill the box with a choice no one made — and clearing
+    that box is exactly how the UI asks for the default back.
+    """
+    payload = app.reset_settings({"keys": ["OUTPUT_FOLDER"]})
+    field = {f["key"]: f for f in payload["fields"]}["OUTPUT_FOLDER"]
+
+    assert field["value"] == ""
+    assert field["source"] == "default"
+    assert field["placeholder"]
+    # Only the form is blank: the run still writes under the first photo folder.
+    assert app.ctx.settings.output.folder == library_root / "Sorted"
+
+    app.put_settings({"values": {"OUTPUT_FOLDER": str(library_root)}})
+    field = {f["key"]: f for f in app.get_settings()["fields"]}["OUTPUT_FOLDER"]
+    assert field["value"] == str(library_root)   # a chosen one is shown
 
 
 def test_saving_a_setting_takes_effect_without_a_restart(app, tmp_path):
@@ -428,3 +494,101 @@ def test_saving_a_doubt_rule_that_deletes_is_rejected(app):
         app.put_rules({"rules": [
             {"name": "in-doubt", "when": {"in_doubt": True}, "action": "delete"},
         ]})
+
+
+# ---------------------------------------------------------------- duplicates
+
+
+def test_marking_records_a_decision_and_touches_no_file(app, ctx, library_root):
+    """The Duplicates tab's only write. It has no file operation behind it —
+    a `discard` mark is a note, not a deletion."""
+    duplicates.scan_folders(ctx)
+    image_id = next(iter(ctx.dupes.images.iter_live_paths()))["id"]
+    path = ctx.dupes.images.path_of(image_id)
+
+    result = app.mark_duplicates([image_id], "discard")
+
+    assert result == {"marked": 1, "mark": "discard"}
+    assert ctx.dupes.marks.all() == {image_id: "discard"}
+    from pathlib import Path
+    assert Path(path).exists()
+    assert ctx.dupes.images.count("deleted = 1") == 0
+
+
+def test_a_mark_can_be_taken_back(app, ctx):
+    duplicates.scan_folders(ctx)
+    image_id = next(iter(ctx.dupes.images.iter_live_paths()))["id"]
+
+    app.mark_duplicates([image_id], "keep")
+    app.mark_duplicates([image_id], None)
+
+    assert ctx.dupes.marks.all() == {}
+
+
+def test_an_unknown_mark_is_rejected(app, ctx):
+    duplicates.scan_folders(ctx)
+    image_id = next(iter(ctx.dupes.images.iter_live_paths()))["id"]
+    with pytest.raises(ValueError, match="unknown mark"):
+        app.mark_duplicates([image_id], "probably")
+
+
+def test_duplicate_groups_carry_scores_and_marks(app, ctx):
+    """The shape the Duplicates tab renders from."""
+    library.scan_library(ctx)
+    payload = app.get_duplicate_groups()
+    for group in payload["groups"]:
+        assert "similarity" in group
+        for image in group["images"]:
+            assert 0.0 <= image["similarity"] <= 100.0
+            assert "mark" in image
+
+
+def test_discarding_moves_unless_the_caller_asks_to_delete(app, ctx, library_root, monkeypatch):
+    """The destructive route is opt-in per request: the endpoint called with no
+    argument is the one that moves files, never the one that trashes them."""
+    trashed: list[str] = []
+    monkeypatch.setattr(filesystem, "trash", lambda path: trashed.append(str(path)) or True)
+    duplicates.scan_folders(ctx)
+    image_id = next(iter(ctx.dupes.images.iter_live_paths()))["id"]
+    app.mark_duplicates([image_id], "discard")
+
+    result = app.discard_marked_duplicates()
+
+    assert result["deleted"] is False and result["count"] == 1
+    assert trashed == []
+    assert (library_root / "_Duplicates").is_dir()
+
+
+def test_the_duplicates_page_is_served_separately_from_the_sorting_page():
+    """Two documents, not two tabs — a route each, and neither embeds the other."""
+    from app.interfaces.web.server import DUPES_PAGE, PAGE
+    sorting, dupes = PAGE.read_text(), DUPES_PAGE.read_text()
+    assert 'href="/duplicates"' in sorting        # the way across
+    assert 'id="tab-duplicates"' not in sorting   # and no tab left behind
+    assert "/api/dupes/thumbnail" in dupes        # its own image route
+    assert "/api/thumbnail?" not in dupes         # never the sorting one's
+
+
+def test_dupes_config_reports_its_own_folders_and_index(app, ctx, library_root):
+    config = app.get_dupes_config()
+    assert config["folders"] == [str(library_root)]
+    assert config["indexed"] == 0                 # nothing hashed until it is scanned
+
+    stats = duplicates.scan_folders(app.ctx)
+
+    assert stats.added > 0
+    assert app.get_dupes_config()["indexed"] == stats.added
+
+
+def test_a_dupe_thumbnail_resolves_against_the_duplicate_index(app, ctx):
+    """The two indexes number their rows independently, so serving a duplicate's
+    thumbnail out of the sorting index would show an unrelated photo."""
+    duplicates.scan_folders(app.ctx)
+    image_id = next(iter(app.ctx.dupes.images.iter_live_paths()))["id"]
+
+    body, content_type = app.dupe_thumbnail_bytes(image_id, 64)
+
+    assert content_type == "image/jpeg"
+    assert body[:2] == b"\xff\xd8"                # a real JPEG
+    with pytest.raises(MediaSortError, match="no such image"):
+        app.thumbnail_bytes(image_id, 64)         # unknown to the sorting index

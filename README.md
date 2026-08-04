@@ -2,7 +2,9 @@
 
 Offline photo indexer and sorter. Points at a photo library, finds the photos
 containing whatever **you** define, and does whatever **you** decide with them —
-by default, a sorted tree of copies that never touches the originals.
+by default, a sorted tree of copies that never touches the originals. Videos in
+the same library are sorted by their content too, from frames sampled across
+each one.
 
 Runs directly on your machine against your own Ollama. No cloud, no network at
 runtime, nothing to orchestrate.
@@ -30,7 +32,8 @@ up exactly where it stopped. Nothing is processed twice unless the file itself
 changed.
 
 For a longer explanation of *why* it works this way — YOLO, the second
-opinion, the rules engine — see [docs/CONCEPTS.md](docs/CONCEPTS.md). For a
+opinion, the rules engine — see [docs/CONCEPTS.md](docs/CONCEPTS.md). For every
+command and option, with recipes, see [docs/CLI.md](docs/CLI.md). For a
 tour of the code itself, module by module, see
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -73,7 +76,7 @@ output/
 ├── Cat/
 ├── Dog/
 ├── Cat-Dog/
-├── video/       # matched by extension, not by a model — see "Rules" below
+├── video/       # the clips nothing was recognised in — see "Rules" below
 └── _Review/     # what neither model could settle — see the doubt rule
 ```
 
@@ -85,17 +88,67 @@ source .venv/bin/activate
 mediasort run
 ```
 
+### If you move or rename the project folder
+
+A Python virtualenv is **not relocatable**. Every script `pip` installs into
+`.venv/bin/` gets the interpreter's absolute path baked into its first line:
+
+```
+#!/home/you/projects/media-sorter/.venv/bin/python3
+```
+
+Move or rename the folder and that path stops existing, so *every* `.venv/bin/`
+command breaks at once — `make install`, `make test`, `mediasort`, `pip`:
+
+```
+make: .venv/bin/pip: No such file or directory
+make: *** [Makefile:25: install] Error 127
+```
+
+The message is misleading. `.venv/bin/pip` is right there; what is missing is
+the **interpreter named in its shebang**. The kernel reports the failure against
+the script it was asked to run, not against the interpreter it could not find,
+so anything launched this way names the wrong file.
+
+Two ways out.
+
+**Rebuild it** — always correct, but re-downloads torch:
+
+```bash
+make uninstall && make install
+```
+
+**Or rewrite the paths in place** — seconds, no download:
+
+```bash
+find .venv -type f -exec grep -Il "OLD-FOLDER-NAME" {} + \
+  | xargs sed -i 's|/home/you/projects/OLD-FOLDER-NAME|/home/you/projects/NEW-FOLDER-NAME|g'
+```
+
+`-type f` matters: `.venv/bin/python` and friends are **symlinks**, and `sed -i`
+replaces a symlink with a regular file rather than editing through it, which
+breaks the virtualenv in a new and less obvious way. `grep -Il` skips binaries
+for the same reason. Around 30 files need it — the `bin/` scripts, `pyvenv.cfg`,
+and the editable install's `__editable___*_finder.py` and `direct_url.json`.
+
+Check it worked before trusting it:
+
+```bash
+.venv/bin/pip --version && .venv/bin/mediasort --help
+```
+
+One thing to know while diagnosing this: `.venv/bin/python -m pytest` keeps
+working the whole time. Naming the interpreter explicitly skips the shebang, so
+the test suite passes on a virtualenv whose every console script is broken. A
+green test run is not evidence that `make install` works.
+
 ## Configuration
 
 ### The folders
 
-The photo folders and the output folder are not environment variables, and
-`MEDIASORT_INPUT_FOLDERS` / `MEDIASORT_OUTPUT_FOLDER` are **ignored** if you set
-them. Which folders to read, and where to write a tree that `delete` rules are
-recorded against, are session choices rather than properties of the machine — an
-exported variable silently redirecting either one is a worse failure than having
-to name it. So there are three places to say it, and they are the same three
-places for both folders:
+The folders are ordinary settings, read from the same three layers as
+everything else. In practice you will set them one of three ways, and the same
+three work for both folders:
 
 ```bash
 mediasort config set --input ~/Pictures --output ~/Sorted   # saved, applies to everything after
@@ -155,12 +208,14 @@ setting back to `.env` — `config unset KEY`, or one click. Everything else is
 
 Paths are ordinary paths on this machine. The tool sees exactly what you see, so
 your photo folders are as writable as any other file you own — which is what
-makes `delete` rules possible, and why `--yes` (or the confirm checkbox in the
-web UI) is the only thing standing between a rule and your originals. `move`
-and `delete` rules are always available; `delete` always goes to the trash
-folder, never a permanent unlink. Preview first.
+makes `delete` rules possible, and why **the ruleset is the only thing standing
+between a rule and your originals**. `move` and `delete` run on every ordinary
+run, with nothing to confirm: a rule that says `delete` deletes. `delete` always
+goes to the trash folder, never a permanent unlink. Preview first —
+`mediasort apply --dry-run` lists every source and destination without touching
+anything.
 
-`.env.example` is deliberately short: it contains exactly the three settings
+`.env.example` is deliberately short: it contains exactly the four settings
 below and nothing else, and every one of them works as shipped.
 
 | Variable                        | Default                  | What it does                                             |
@@ -168,6 +223,7 @@ below and nothing else, and every one of them works as shipped.
 | `MEDIASORT_OLLAMA_URL`          | `http://127.0.0.1:11434` | Your Ollama. Also in the UI.                             |
 | `MEDIASORT_OLLAMA_MODEL`        | `llava-llama3`           | Vision model for both Ollama passes. Also in the UI.     |
 | `MEDIASORT_DETECT_MODEL`        | `yolo11m.pt`             | `yolo11n` (fast) … `yolo11x` (accurate).                 |
+| `MEDIASORT_DETECT_VIDEO_FRAMES` | `8`                      | Frames sampled per video. `0` sorts videos by extension only. |
 
 The semantic pass always runs — there is no on/off switch for it any more, in
 the UI or in `.env`. The confidence band and the second opinion are per rule
@@ -233,7 +289,6 @@ combined rule, one per class, one catch-all:
 
 ```jsonc
 {
-  "version": 1,
   "rules": [
     { "name": "cat-dog", "when": {"all_of": ["cat", "dog"]}, "action": "copy" },
     { "name": "cat",     "when": {"class": "cat"},           "action": "copy" },
@@ -248,12 +303,24 @@ The starter is deliberately linear in the number of classes rather than one
 rule per combination — five classes would otherwise mean 31 rules to read.
 Add the combinations you actually want in the editor.
 
-`video` is a class like any other in a rule, but no model ever looks for it: a
-file matches it by extension (`.mp4`, `.mov`, `.mkv`, ... — the full list is
-`domain.detection.VIDEO_EXTENSIONS`) rather than by what YOLO or Ollama saw,
-which is why it comes out of the starter as its own `move` rule instead of
-joining the `all_of` combination above it — "a cat and a video in the same
-photo" is not a thing.
+Videos go through the same rules as photos. YOLO samples
+`MEDIASORT_DETECT_VIDEO_FRAMES` stills (8 by default) spread across each one
+and sorts it by what it saw in them, so a clip of your cat lands in `Cat/`
+next to the photos of it.
+
+`video` is the one class no model looks for: it is true of a file by its
+extension (`.mp4`, `.mov`, `.mkv`, ... — the full list is
+`video.VIDEO_EXTENSIONS`), and every video carries it *on top of* whatever
+was found in its frames. That is why it comes out of the starter as its own
+`move` rule placed below the real classes rather than joining the `all_of`
+combination above them: rules are tried in order, so the cat rule gets the
+cat video first, and the `video` rule catches the rest — the clips nothing
+was recognised in, and the ones no frame could be read from. Move it to the
+top and it becomes the opposite: every video sorted as a video, whatever is
+in it. That is a legitimate choice, and it is one line of the rules file.
+
+Set `MEDIASORT_DETECT_VIDEO_FRAMES=0` to skip decoding altogether — videos
+are then matched by extension alone, which is faster and blind.
 
 A richer example — note that none of this required a code change:
 
@@ -326,11 +393,8 @@ what one of them means:
 | `ignore` | nothing | stays put; still indexed and searchable |
 
 `folder:` on a rule chooses where `copy` and `move` put it, defaulting to the
-rule's own name.
-
-Rules files written before this used `link` (and `review`, `symlink`,
-`hardlink`). They are rewritten to `copy` as they load — there is nothing to
-migrate by hand.
+rule's own name. Any other action name is rejected by `mediasort rules
+validate`, which names the four that exist.
 
 ### The doubt rule
 
@@ -354,10 +418,9 @@ about is the one thing doubt must not lead to unattended.
 | `copy` | it is sorted normally *and* a duplicate lands in `_Review`. |
 | `ignore` | doubt changes nothing; the matched rule runs as usual. |
 
-Because the default is `move`, and moving needs a confirmation, a fresh install
-surfaces nothing into `_Review` until you pass `--yes` (or tick the confirm
-checkbox in the UI) — it says so. Uncertain photos are still flagged in the
-index either way, and `mediasort stats` counts them.
+Because the default is `move`, a fresh install relocates anything it could not
+settle into `_Review` on the first run. Uncertain photos are flagged in the
+index as well, and `mediasort stats` counts them.
 
 ### Moving instead of copying
 
@@ -380,18 +443,15 @@ or rebuilt on a later run the way copies are. Re-running finds the photo already
 filed and leaves it alone, so re-categorising it means moving it again, not
 undoing anything.
 
-Like deletion, moving needs one confirmation:
-
-1. `--yes` on the command line (or the checkbox in the UI)
-
-Preview with `mediasort apply --dry-run` first; it lists every source and
+Moving is not gated: a rule whose action is `move` relocates originals on every
+run. Preview with `mediasort apply --dry-run` first; it lists every source and
 destination without touching anything.
 
 ### Deleting
 
-Deletion needs the same confirmation:
-
-1. `--yes` on the command line (or the checkbox in the UI)
+Deletion is not gated either — a `delete` rule empties into the trash folder on
+every run. `mediasort doctor` names every rule that consumes originals, which is
+the one warning you get before a run does.
 
 Running natively, that is genuinely all there is: the tool runs as you, so your
 photos are as writable to it as they are to any program you start. There is no
@@ -410,12 +470,77 @@ Always run `mediasort apply --dry-run` first.
 make web        # http://127.0.0.1:8765
 ```
 
-Five tabs: **Rules** (visual editor with reordering), **Run** (the folders, the
-progress, and the three steps), **Preview** (dry run and "what would these rules
-do to my library?"), **Settings** (the same folders, plus Ollama URL and model
-and the semantic pass on/off) and **JSON** for anything the visual editor cannot
+Two pages, one server. The sorting page at `/` has five tabs: **Rules** (visual
+editor with reordering), **Run** (the folders, the progress, and the three
+steps), **Preview** (dry run and "what would these rules do to my library?"),
+**Settings** (the same folders, plus Ollama URL and model, and whether to
+remember this library) and **JSON** for anything the visual editor cannot
 express. Each tab is addressable — `#run`, `#settings` — so a reload stays put.
 Built on the standard library, no CDN assets — it works with the network off.
+
+### Duplicates — `/duplicates`
+
+**A separate page, over its own folders.** De-duplicating a folder and sorting a
+library are different jobs, so the duplicate finder has its own input folder, its
+own index, and its own scan. Pointing it at a folder does *not* add that folder
+to the sorting library, does not run the detector over it, and does not put a
+single row in the pipeline's counters. The reverse holds too: your sorting
+library does not turn up here unless you name it here as well.
+
+Its index follows the same rule as the sorting one — **in memory by default,
+nothing left behind** — with its own opt-in toggle ("remember this scan") that
+keeps the hashes in `<folder>/.mediasort/dupes.db`, separate from `index.db`.
+
+Finds photos that only *look* the same — a re-save, a resize, a different
+format — which a checksum cannot. Each photo is compared by perceptual hash and
+scored as a percentage against the group's best copy:
+
+```
+group is 98.4% alike at the loosest
+  100.0%  original.png   <- 200×150 PNG
+  100.0%  resaved.jpg    <- the same picture at JPEG quality 60
+   98.4%  small.jpg      <- the same picture at half the size
+```
+
+100% means the two *hashes* are identical, not the two files — surviving a
+re-encode is the whole point of the comparison.
+
+**Max distance** is the same measurement in the other direction: how many of the
+64 hash bits are allowed to differ. 10 bits is 84.4% alike, and the page shows
+that conversion next to the box. Every photo in a group is within the threshold
+of the copy it is scored against — grouping finds candidates by chaining (A near
+B, B near C), then splits each chain around its best copy, so a group can never
+show you a pair looser than the number you asked for.
+
+**Marking changes nothing on disk.** You mark each photo `Keep` or `Discard`; a
+mark is a note to yourself, stored so a big folder can be reviewed across
+several sittings without losing your place. Clicking a mark you already have
+takes it back off, so "not decided yet" stays a real third state. Each group
+also offers the three verdicts worth one click: **Mark best, discard rest**
+(highest resolution, then largest file), **Keep all**, and **Discard all**.
+
+Acting on the marks is a separate, explicit press: **Delete duplicates** — in
+the header and again in its own card — takes everything currently marked
+`Discard` and, by default, sends it to your desktop trash. Recoverable from
+there until you empty it, and the button says how many photos it is about to
+touch, and where they will land, before you press it. This needs `send2trash`
+installed; without it, the button says so and touches nothing.
+
+Untick **delete straight to the desktop trash** next to it and the same press
+*moves* those photos into `<folder>/_Duplicates` instead, keeping the folder
+structure they had — no unlink at all, undone by dragging the folder back.
+Re-scanning skips that folder, so a discarded photo is not offered back as a
+duplicate of the copy you kept. Either way the choice is read at the moment you
+press and never stored, so the setting you can see on screen is the one that
+runs.
+
+**Not duplicates** dismisses a group instead: the grouper stops proposing that
+pairing. Dismissal is per pair, so a third photo close to both can still pull
+them back together — a verdict on two photos is not a verdict on a whole group.
+
+Grouping needs a perceptual hash for every photo, so the page has two steps:
+**Scan folder** hashes what is in the folder, and **Find duplicates** groups
+what has been hashed. Re-scanning only re-reads files that changed.
 
 The Run tab is laid out as the run itself: the **folders** first, since nothing
 can start without them and they are the one setting a run cannot guess; then
@@ -432,6 +557,13 @@ changed since the last scan"*. A step that had nothing to do says so where you
 pressed it, which is the difference between an honest no-op and a button that
 looks broken. A failure is printed in the same place, in red, instead of a status
 line somewhere else on the page.
+
+**Run everything**, top right of the header, is those three steps in one press —
+the web UI's `mediasort run`. It is one job on the server rather than the page
+firing three in sequence, so closing the browser halfway does not leave the run
+stopped where it stood; it renames itself as it advances, so the step cards and
+bars below light up exactly as if each button had been pressed in turn, and the
+result names all three steps.
 
 A **Where you are** panel above them reads the same counters and says in one
 sentence which button comes next — including the cases that otherwise look like a
@@ -451,13 +583,16 @@ files. Keep `MEDIASORT_WEB_HOST` on `127.0.0.1`.
 
 ## Commands
 
+Every option, plus recipes and troubleshooting, is in
+[docs/CLI.md](docs/CLI.md). The summary:
+
 ```
 mediasort scan            index new / changed images (safe to re-run any time)
-mediasort run             full pipeline: scan, all three passes, apply  [--yes]
+mediasort run             full pipeline: scan, all three passes, apply
 mediasort detect          detection pass only              [--limit N]
 mediasort adjudicate      second opinion on the unsure ones [--limit N]
 mediasort analyze         semantic pass only               [--limit N]
-mediasort apply           execute the rule actions   [--dry-run] [--yes]
+mediasort apply           execute the rule actions   [--dry-run]
 mediasort recheck         re-decide from stored evidence (no GPU, no Ollama)
 
 mediasort config show     the folders and Ollama settings, and their source
@@ -508,6 +643,17 @@ stored down to the lowest `min_review_confidence` any rule's class band asks
 for, not the (possibly higher) `min_confidence` that band auto-passes at — the
 extra rows are what make the review flag and later threshold changes possible
 without re-running the model.
+
+A video goes through the same model by a second route: eight stills sampled
+across it (`MEDIASORT_DETECT_VIDEO_FRAMES`) run as one batch, so a video costs
+what eight photos cost. The frames then have to agree on one answer, because
+the index stores detections per *file* — per class, the frame that saw the most
+of it wins, ties going to the more confident frame. That keeps counts meaning
+something: a `min_count: 2` rule still needs one frame that actually held two.
+The boxes stored for a video are that winning frame's, in its coordinates.
+Every video also carries the `video` class on top of whatever was found, which
+is what makes a `{"class": "video"}` rule the fallback under the real ones —
+see [Rules](#rules).
 
 **Second opinion.** The detector is cheap and sure of itself; the vision model
 is slow and can actually look. So the expensive one is asked exactly one
@@ -569,17 +715,55 @@ links that no longer belong, then creates what is missing. That ordering makes
 is recorded in the `links` table, so pruning removes exactly what this tool
 created and nothing else.
 
+### Where the index lives — and whether it exists
+
+**By default it does not.** The index is held in memory for the run and dropped
+when the command ends. Point the tool at a folder, sort it, walk away: nothing
+is written into your photos, and there is no state anywhere to go stale, get
+confused between libraries, or need cleaning up.
+
+That default is right because the index is only ever a *cache of expensive
+work* — what YOLO saw, what Ollama said. It pays for itself when the same
+folder is worked on twice, and costs you a stray file when it isn't.
+
+For a library big enough that losing a half-finished detection run would hurt,
+turn it on:
+
+```bash
+mediasort config set --save-index      # or the Settings tab's "Remember this library"
+mediasort config set --no-save-index   # back to leaving nothing behind
+```
+
+The index then lives **inside the library it describes**, at
+`<photo folder>/.mediasort/index.db` — not in the app folder. One index per
+library, which has three consequences worth knowing:
+
+- Pointing the tool at a different folder cannot disturb this one's work.
+- The saved work travels with the drive. Plug it into another machine and the
+  detection results are still there.
+- The `.mediasort` folder is hidden, and the scanner skips dotted directories,
+  so it never indexes its own index.
+
+Setting `MEDIASORT_DB` to a specific file overrides both — naming a location is
+itself a request to save one.
+
+An index written by an older version of this tool is **silently thrown away and
+rebuilt**, never refused. Everything in it is re-derivable by re-scanning, so
+there is no version to bump, nothing to migrate, and no error to read before you
+can get on with sorting photos.
+
 ### Schema
 
 ```
-images         id, path, filename, root, hash, size, mtime, width, height,
+images         id, path, filename, root, hash, phash, size, mtime, width, height,
                format, taken_at, category, action, needs_review, detect_state,
                adjudicate_state, analyze_state, missing, deleted, error
 detections     image_id, class, confidence, x1, y1, x2, y2, model
 adjudications  image_id, class, verdict, confidence, model
 metadata       image_id, json, model
-links          image_id, link_path, mode
+links          image_id, link_path
 action_log     image_id, action, detail, created_at
+dupe_dismissals  image_id_a, image_id_b
 ```
 
 `category` is the name of the rule that matched and `action` is what it asked
@@ -664,10 +848,11 @@ make test                       # .venv/bin/pytest -q tests
 Tests covering the rules engine and its parser, the decision engine, the
 scanner's incremental behaviour, action planning and execution (including every
 deletion lock), database claiming and migration, the Ollama client against a
-fake server, both stage loops against fake inference engines, the web
-operations, the configuration layers, and a CLI smoke test per command. They use
-only temporary directories — no GPU, no Ollama, no real photo library, and
-neither your `.env` nor your saved settings can reach them.
+fake server, both stage loops against fake inference engines, frame sampling
+against real videos written on the fly, the web operations, the configuration
+layers, and a CLI smoke test per command. They use only temporary directories —
+no GPU, no Ollama, no real photo library, and neither your `.env` nor your
+saved settings can reach them.
 
 ## Notes and limits
 
@@ -676,11 +861,17 @@ neither your `.env` nor your saved settings can reach them.
   vision model is the fix — nothing in the pipeline changes.
 - HEIC/HEIF works out of the box — `pillow-heif` is a hard dependency and the
   extensions are indexed by default. RAW formats are not handled.
-- Videos are indexed and can be matched and sorted by a rule (`{"class":
-  "video"}`), but their content is never looked at — no frame is decoded, by
-  either YOLO or Ollama. A video only gets the `video` pseudo-class; it never
-  earns `cat` or any other real class the way a photo of the same subject
-  would.
+- Videos are sorted by their content: YOLO runs on
+  `MEDIASORT_DETECT_VIDEO_FRAMES` stills sampled across each file, and the
+  frame that saw the most of a class speaks for the whole video (so
+  `min_count` still means something). Every video also carries the `video`
+  class, which is what a `{"class": "video"}` rule below the real ones
+  catches. Two things to know: a subject that appears between two sampled
+  frames is missed — raise the count for long clips — and the box
+  coordinates stored for a video belong to one frame, not to the file.
+- Ollama sees a video as a single frame from halfway in, both for the
+  description pass and for a second opinion. That is a real limitation for
+  anything that only makes sense in motion.
 - `move` within one filesystem is a rename and costs nothing; across filesystems
   it is a copy followed by a delete, and takes as long as the bytes do.
 - `hundreds of thousands of images` is the design target: SQLite with WAL

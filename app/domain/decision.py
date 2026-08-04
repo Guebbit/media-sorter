@@ -11,16 +11,11 @@ from dataclasses import dataclass
 from typing import Sequence
 
 from .detection import Detection
-from .rules import (ClassBand, DEFAULT_CONFIDENCE, DEFAULT_OLLAMA_REVIEW,
-                    DEFAULT_REVIEW_CONFIDENCE, MatchContext, RuleSet)
+from .rules import DEFAULT_CONFIDENCE, MatchContext, RuleSet
 
 #: What an image gets when no rule claims it.
 UNMATCHED_CATEGORY = "none"
 UNMATCHED_ACTION = "ignore"
-
-#: What a class with no band at all gets — one a rule no longer mentions
-#: (deleted since the detection was made), but the row still carries.
-_DEFAULT_BAND = ClassBand(DEFAULT_CONFIDENCE, DEFAULT_REVIEW_CONFIDENCE, DEFAULT_OLLAMA_REVIEW)
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,17 +35,10 @@ def decide(detections: Sequence[Detection], ruleset: RuleSet) -> Decision:
     """
     rule = ruleset.evaluate(MatchContext(tuple(detections), DEFAULT_CONFIDENCE))
 
-    bands = ruleset.class_bands()
-
-    def band(cls: str) -> ClassBand:
-        return bands.get(cls, _DEFAULT_BAND)
-
-    confident = {d.cls for d in detections if d.confidence >= band(d.cls).confidence}
-    uncertain = {
-        d.cls for d in detections
-        if band(d.cls).review_confidence <= d.confidence < band(d.cls).confidence
-    }
-    needs_review = bool(uncertain - confident)
+    # Every class the detector left in its review band. The `ollama_review`
+    # toggle is deliberately ignored: a class nobody will ask Ollama about is
+    # still one a person should look at, which is the whole point of the flag.
+    needs_review = bool(ruleset.class_bands().unsettled(detections))
 
     if rule is None:
         return Decision(UNMATCHED_CATEGORY, UNMATCHED_ACTION, needs_review)

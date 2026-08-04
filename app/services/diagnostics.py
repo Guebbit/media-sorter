@@ -31,7 +31,9 @@ def doctor(ctx: AppContext) -> list[Check]:
     """Every diagnostic check, in the order a user would want to read them:
     config layering, the index, the library, the rules, the detector, Ollama."""
     checks: list[Check] = _config_checks(ctx)
-    checks.append(Check("index", str(ctx.settings.paths.database)))
+    database = ctx.settings.paths.database
+    checks.append(Check("index", str(database) if database else
+                        "in memory — nothing saved (turn on 'Remember this library' to keep it)"))
     checks += _library_checks(ctx)
     checks += _rules_checks(ctx)
     checks += _detector_checks(ctx)
@@ -88,15 +90,16 @@ def _rules_checks(ctx: AppContext) -> list[Check]:
     except MediaSortError as exc:
         return [Check("rules", str(exc), "fail")]
 
-    # `move` and `delete` consume the original, so it is worth naming which
-    # rules use them — they only run once a run explicitly confirms it
-    # (`apply --yes`, or the confirm checkbox in the web UI).
+    # `move` and `delete` consume the original and run unprompted, so naming
+    # the rules that use them is the only warning there is that the next run
+    # will not leave the library as it found it.
     for action in sorted(ctx.actions.consuming_names()):
         rules = [r.name for r in ruleset.rules if r.action == action]
         if rules:
             checks.append(Check(
                 f"{action} rules",
-                f"{', '.join(rules)} — needs confirmation to run",
+                f"{', '.join(rules)} — {action}s originals on every run",
+                "warn",
             ))
     return checks
 
@@ -118,6 +121,11 @@ def _detector_checks(ctx: AppContext) -> list[Check]:
         return [
             Check("torch device", describe_device(detect)),
             Check("detector weights", path, "ok" if found else "fail"),
+            Check(
+                "video frames",
+                f"{detect.video_frames} sampled per video" if detect.samples_video
+                else "0 — videos sorted by extension only",
+            ),
         ]
     except Exception as exc:  # noqa: BLE001 - a diagnostic must never itself crash
         return [Check("detector", str(exc), "fail")]

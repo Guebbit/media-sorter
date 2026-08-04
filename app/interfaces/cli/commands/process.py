@@ -51,10 +51,14 @@ def detect(
     # never touches the detector would otherwise pay to load at startup.
     from ....detecting import describe_device
 
+    detect_settings = ctx.settings.detect
     console.print(
-        f"[dim]device:[/dim] {describe_device(ctx.settings.detect)}  "
-        f"[dim]model:[/dim] {ctx.settings.detect.model}  "
-        f"[dim]looking for:[/dim] {', '.join(ruleset.detector_classes())}"
+        f"[dim]device:[/dim] {describe_device(detect_settings)}  "
+        f"[dim]model:[/dim] {detect_settings.model}  "
+        f"[dim]video:[/dim] "
+        + (f"{detect_settings.video_frames} frames each" if detect_settings.samples_video
+           else "by extension only")
+        + f"  [dim]looking for:[/dim] {', '.join(ruleset.detector_classes())}"
     )
 
     pending = ctx.storage.images.count_pending(Stage.DETECT)
@@ -128,8 +132,6 @@ def run(
     no_analyze: bool = typer.Option(False, "--no-analyze", help="Detection only."),
     no_apply: bool = typer.Option(False, "--no-apply", help="Skip running the rule actions."),
     skip_scan: bool = typer.Option(False, "--skip-scan", help="Reuse the existing index."),
-    yes: bool = typer.Option(False, "--yes", "-y",
-                             help="Also run actions that move or remove originals."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ):
     """Full pipeline: scan, then detect and analyze in parallel, then apply the rules."""
@@ -183,7 +185,7 @@ def run(
             render.verdicts(stats.verdicts)
 
     if not no_apply and not stopper.stopped:
-        stats, planned = applying.apply(ctx, ruleset, confirmed=yes)
+        stats, _ = applying.apply(ctx, ruleset)
         render.apply_result(stats, ctx.settings.output.folder)
     render.overview(insights.overview(ctx))
 

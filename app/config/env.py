@@ -8,10 +8,8 @@ first:
 3. the runtime overlay the web UI and `mediasort config set` write, for the
    handful of keys in `config.overrides`.
 
-Layer 2 has one exception: the input folders and the output folder are read from
-the overlay only, never from the environment (`overrides.NO_ENVIRONMENT`). They
-have no machine-wide right answer, so they are named where the work is asked for
-— a flag, or a saved choice — and `INPUT_FOLDERS` has no default at all.
+Every key reads all three layers the same way; `INPUT_FOLDERS` is simply the one
+with no default at all.
 
 Nothing downstream can tell the difference: by the time a `Settings` exists it is
 a frozen value with no memory of where any of it came from. `source_of` reports
@@ -24,17 +22,18 @@ import os
 from pathlib import Path
 from typing import Mapping
 
-from ..domain.detection import VIDEO_EXTENSIONS
+from ..video import VIDEO_EXTENSIONS
 from . import dotenv, overrides
-from .sections import (AnalyzeSettings, DetectSettings, LibrarySettings, OutputSettings, Paths,
-                       Settings, WebSettings, WorkerSettings)
+from .sections import (AnalyzeSettings, DetectSettings, DupesSettings, LibrarySettings,
+                       OutputSettings, Paths, Settings, WebSettings, WorkerSettings)
 
 PREFIX = "MEDIASORT_"
 
 #: Everything Pillow can open here, HEIC/HEIF included — that one needs
 #: `pillow-heif`, which is a hard dependency, so it is always available — plus
-#: every video extension, which the detector never decodes: a video gets the
-#: synthetic "video" pseudo-class instead (`domain.detection.is_video`).
+#: every video extension. A video is sampled for frames rather than decoded
+#: whole (`DETECT_VIDEO_FRAMES`), and always also carries the "video"
+#: pseudo-class (`video.is_video`).
 DEFAULT_EXTENSIONS = ".jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,.heic,.heif," + ",".join(
     sorted(VIDEO_EXTENSIONS)
 )
@@ -45,6 +44,10 @@ DEFAULT_EXTENSIONS = ".jpg,.jpeg,.png,.webp,.bmp,.tif,.tiff,.heic,.heif," + ",".
 #: results.
 DEFAULT_EXCLUDE_DIRS = ".git,node_modules,@eaDir,output,Output,Sorted"
 DEFAULT_SETTINGS_FILE = "data/settings.json"
+
+#: Where a saved index lives inside the library it describes. Hidden, and in the
+#: walker's blind spot already — the scanner skips dotted directories.
+INDEX_DIRNAME = ".mediasort"
 
 #: Point at a specific `.env`; a missing file then loads nothing, which is how
 #: tests and hand-configured deployments opt out of the upward search entirely.
@@ -59,15 +62,9 @@ class _Layers:
         self.overlay = dict(overlay or {})
 
     def raw(self, key: str) -> str | None:
-        """The winning value for `key`, or None when no layer sets it.
-
-        The environment is skipped entirely for the keys that declare themselves
-        `from_environment=False` — the two folders. Everything else sees all
-        three layers.
-        """
-        candidates = [self.overlay.get(key)]
-        if key not in overrides.NO_ENVIRONMENT:
-            candidates.append(os.environ.get(PREFIX + key))
+        """The winning value for `key`, or None when no layer sets it —
+        the overlay first, then the environment."""
+        candidates = [self.overlay.get(key), os.environ.get(PREFIX + key)]
         for candidate in candidates:
             if candidate is not None and candidate.strip() != "":
                 return candidate.strip()
@@ -82,13 +79,6 @@ class _Layers:
         """`key` parsed as an int, or `default` if unset or unparseable."""
         try:
             return int(self.str_(key, str(default)))
-        except ValueError:
-            return default
-
-    def float_(self, key: str, default: float) -> float:
-        """`key` parsed as a float, or `default` if unset or unparseable."""
-        try:
-            return float(self.str_(key, str(default)))
         except ValueError:
             return default
 
@@ -128,19 +118,76 @@ def source_of(key: str, overlay: Mapping[str, str] | None = None) -> str:
     values = overrides.load(settings_file()) if overlay is None else overlay
     if values.get(key):
         return "settings"
-    if key not in overrides.NO_ENVIRONMENT and os.environ.get(PREFIX + key, "").strip():
+    if os.environ.get(PREFIX + key, "").strip():
         return "environment"
     return "default"
 
 
-def _build_paths(layers: _Layers, overlay_path: Path, models_dir: Path) -> Paths:
+def _index_path(layers: _Layers, input_folders: tuple[Path, ...]) -> Path | None:
+    """Where this run's index lives, or `None` to keep it in memory.
+
+    Three answers, in order:
+
+    1. `DB` names a file — an explicit location always wins and always saves.
+    2. `SAVE_INDEX` is on — the index goes *beside the library*, in
+       `<first photo folder>/{INDEX_DIRNAME}/index.db`, not in the app folder.
+       One index per library rather than one shared by every folder ever
+       pointed at, so libraries cannot contaminate each other and the saved
+       work travels with the drive it describes.
+    3. Neither — nothing is written.
+
+    Off by default because the index only pays for itself when the same folder
+    is worked on twice. It is worth turning on for a library big enough that
+    losing a half-finished detection run to a Ctrl-C would hurt.
+    """
+    explicit = layers.raw("DB")
+    if explicit:
+        return Path(explicit).expanduser()
+    if not layers.bool_("SAVE_INDEX", False):
+        return None
+    if not input_folders:
+        # Nothing to sit beside yet; `require_folders` will ask for one.
+        return None
+    return input_folders[0] / INDEX_DIRNAME / "index.db"
+
+
+def _build_paths(layers: _Layers, overlay_path: Path, models_dir: Path,
+                 input_folders: tuple[Path, ...]) -> Paths:
     """Where the tool keeps its own state, from the `DB`/`RULES` layers plus
     the already-resolved overlay/models locations."""
     return Paths(
-        database=Path(layers.str_("DB", "data/mediasort.db")).expanduser(),
+        database=_index_path(layers, input_folders),
         rules=Path(layers.str_("RULES", "data/rules.json")).expanduser(),
         models=models_dir,
         settings=overlay_path,
+    )
+
+
+def _dupes_index_path(layers: _Layers, folders: tuple[Path, ...]) -> Path | None:
+    """Where the duplicate finder's index lives, or `None` for memory only.
+
+    Same two answers, and the same default, as `_index_path`: nothing is
+    written unless asked for, and when it is asked for it goes beside the
+    folder it describes rather than in the app directory. A separate file from
+    the sorting index because it describes a separate folder set.
+    """
+    if not layers.bool_("DUPES_SAVE_INDEX", False):
+        return None
+    if not folders:
+        return None
+    return folders[0] / INDEX_DIRNAME / "dupes.db"
+
+
+def _build_dupes(layers: _Layers) -> DupesSettings:
+    """The duplicate finder's own folders and index, sharing only the file-type
+    rules with the sorting library — what counts as an image does not change
+    because the question did."""
+    folders = layers.paths_("DUPES_FOLDERS", "")
+    return DupesSettings(
+        folders=folders,
+        extensions=layers.extensions_("EXTENSIONS", DEFAULT_EXTENSIONS),
+        exclude_dirs=frozenset(layers.list_("EXCLUDE_DIRS", DEFAULT_EXCLUDE_DIRS)),
+        database=_dupes_index_path(layers, folders),
     )
 
 
@@ -163,6 +210,10 @@ def _build_detect(layers: _Layers, models_dir: Path) -> DetectSettings:
         batch=max(1, layers.int_("DETECT_BATCH", 16)),
         imgsz=layers.int_("DETECT_IMGSZ", 640),
         device_name=layers.str_("DETECT_DEVICE", "auto"),
+        # Eight stills is enough to catch a subject that is only in part of a
+        # clip without making one video cost as much as a folder of photos.
+        # `0` opts out and goes back to sorting videos by extension alone.
+        video_frames=max(0, layers.int_("DETECT_VIDEO_FRAMES", 8)),
     )
 
 
@@ -233,11 +284,12 @@ def load_settings(env_file: Path | str | None = None) -> Settings:
     models_dir = Path(layers.str_("MODELS_DIR", "data/models")).expanduser()
 
     settings = Settings(
-        paths=_build_paths(layers, overlay_path, models_dir),
+        paths=_build_paths(layers, overlay_path, models_dir, input_folders),
         library=_build_library(layers, input_folders),
         detect=_build_detect(layers, models_dir),
         analyze=_build_analyze(layers),
         output=_build_output(layers, output_folder),
+        dupes=_build_dupes(layers),
         web=_build_web(layers),
         workers=_build_workers(layers),
         log_level=layers.str_("LOG_LEVEL", "INFO").upper(),

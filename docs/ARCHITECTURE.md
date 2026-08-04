@@ -15,6 +15,7 @@ flowchart TD
     subgraph L0["cross-cutting"]
         errors[errors.py]
         imaging[imaging.py]
+        video[video.py]
         filesystem[filesystem.py]
     end
     subgraph L1["domain — pure, no I/O"]
@@ -78,15 +79,25 @@ whichever module happens to detect the problem. Anything that is not a
 distinction is what lets `interfaces/web/server.py` turn one into a 400 and
 let the other one become a 500 with a logged stack trace.
 
-### `imaging.py`, `filesystem.py`
+### `imaging.py`, `video.py`, `filesystem.py`
 `imaging.py` is the only module that imports Pillow — decoding, EXIF
 orientation, HEIC support and the decompression-bomb guard are handled once
 here instead of separately in the scanner, the detector and the vision
 client, each of which needs pixels for a different reason.
 
+`video.py` is the same bargain for OpenCV, plus `is_video` — the extension
+test that decides which of the two a file goes through. Videos are never
+decoded whole: the detector asks for a handful of frames spread across the
+file (`sample_frames`) and runs them as an ordinary batch, and `imaging` asks
+for one frame when something needs a *picture* of the file (a thumbnail, an
+Ollama request). OpenCV is imported inside the functions, so a run with no
+videos in it never loads it. `is_video` lives here rather than in `domain`
+because the layering forbids `imaging` from reaching down into the pure core,
+and because a list of container extensions is not a domain concept.
+
 `filesystem.py` is every place the tool is allowed to create, move or delete
-a file, expressed as intents (`copy`, `move`, `remove`) rather than scattered
-`shutil` calls — which makes this one file the complete audit surface for
+a file, expressed as intents (`copy`, `move`, `remove`, `trash`) rather than
+scattered `shutil` calls — which makes this one file the complete audit surface for
 "what can touch a byte on disk." There is deliberately no symlink/hardlink
 option: an action's name (`copy`, `move`, `delete`) *is* what it does, with
 no second setting to check.
@@ -94,9 +105,11 @@ no second setting to check.
 ### `domain/` — the pure core
 No I/O, no third-party imports, no environment reads. Four pieces:
 
-- **`detection.py`** — the `Detection` value type (one YOLO box), plus the
-  `video` pseudo-class: a video is never decoded, so a rule matches one by
-  file extension instead, and this module is where that fiction is defined.
+- **`detection.py`** — the `Detection` value type (one YOLO box), the `video`
+  pseudo-class every video carries on top of whatever was found in its frames,
+  and `merge_frames`, which collapses several frames' boxes into the one
+  answer the index stores per file (per class, the frame that saw the most of
+  it wins — so `min_count` still means something for a video).
 - **`decision.py`** — `decide()`, the entire decision engine: given
   detections and a `RuleSet`, resolve each class's confidence band via
   `RuleSet.class_bands()` and return which rule matched and whether the
@@ -172,8 +185,10 @@ detection or the vision model starts instantly, without paying to import
 
 - **`detecting/detector.py`** — one loaded YOLO model, batched inference,
   decode-on-a-thread-pool so the GPU is never left idle between batches.
-  `availability.py` is the cheap "can this even run here?" probe front ends
-  call before committing to anything expensive.
+  `detect_batch` is the photo route and `detect_video` the video one — the
+  frames of one video *are* a batch, so both end in the same single
+  `_predict` call. `availability.py` is the cheap "can this even run here?"
+  probe front ends call before committing to anything expensive.
 - **`analyzing/client.py`** — `OllamaClient`, the transport: build a
   request, resolve a bare model name to the tag actually installed, survive
   a server still starting. **`contract.py`** is the pure half — the
@@ -210,6 +225,10 @@ detection or the vision model starts instantly, without paying to import
   taking an engine *factory* rather than a ready engine, so the expensive
   and failure-prone part (loading YOLO weights, waiting for Ollama) happens
   inside the thread that owns the stage, not the thread that set the run up.
+  `run_detect_stage` splits each claimed batch by `is_video`: photos go to
+  `detect_batch`, videos to `detect_video` plus the `video` pseudo-class
+  appended to whatever it found — which is what makes a `{"class": "video"}`
+  rule the fallback under the real ones rather than a verdict that wins first.
 - **`runner.py`** — `run_pipeline()`: runs several named stages
   concurrently, one thread each, with the fatal/non-fatal distinction
   described in [CONCEPTS.md](CONCEPTS.md) — detection failing stops
@@ -234,14 +253,13 @@ of use cases, all taking an `AppContext` first:
   and the thin per-stage/`run_all` wrappers the CLI and web UI call;
   `recheck()`, the GPU-free replay of stored evidence against the current
   rules.
-- **`applying.py`** — `apply()`/`preview()`, wrapping `actions.apply_actions`
-  with the one confirmation gate (`confirmed=True`) that unlocks `move`/`delete`.
+- **`applying.py`** — `apply()`/`preview()`, wrapping `actions.apply_actions`.
+  Every action a rule asks for runs, `move` and `delete` included: what may
+  happen to an original is decided in the ruleset and nowhere else.
 - **`rules.py`** — reading/validating/initializing the active ruleset;
   `offered_classes()` for the editor's class picker.
 - **`maintenance.py`** — repair/reset/cleanup use cases that never touch an
-  original file (only `move`/`delete` do that, and they live behind two
-  locks of their own: `applying.apply`'s `confirmed` flag, and the CLI's
-  `--yes`/web UI's confirm checkbox).
+  original file. Only `move`/`delete` do that, and they live in `actions`.
 - **`insights.py`**, **`exporting.py`** — read-only reporting and dumping
   the index to JSON/CSV.
 - **`configuring.py`** — the settings form's read/write use cases, shared
@@ -262,8 +280,13 @@ of use cases, all taking an `AppContext` first:
   no CDN asset — keeping the "runs completely offline" promise intact
   down to the control panel itself; `jobs.py` (`JobRunner`) runs one
   background job at a time so a browser doesn't have to hold a connection
-  open for a ten-minute pipeline run; `static/webui.html` is the whole
-  single-page app, plain JS, no build step.
+  open for a ten-minute pipeline run. `static/webui.html` is the sorting
+  app and `static/dupes.html` the duplicate finder — two separate
+  documents, plain JS, no build step, sharing a server and nothing else.
+  They are separate because they are separate tools: the duplicate finder
+  has its own folders (`settings.dupes`) and its own index (`ctx.dupes`),
+  so its image ids mean nothing to the sorting index — which is why it has
+  its own `/api/dupes/*` image routes rather than reusing `/api/image`.
 
 ## Data flow: one CLI command, end to end
 
@@ -285,7 +308,7 @@ sequenceDiagram
     Svc->>Pipe: run_pipeline({detect, adjudicate, analyze})
     Pipe->>DB: claim batch, decide(), persist (per stage)
     Pipe-->>Svc: StageStats per stage
-    CLI->>Svc: applying.apply(ctx, ruleset, confirmed=yes)
+    CLI->>Svc: applying.apply(ctx, ruleset)
     Svc->>DB: plan_all() + apply_actions()
     Svc-->>CLI: ApplyStats
     CLI-->>User: render.apply_result(...)
@@ -375,7 +398,7 @@ photo-manager/
 │   ├── rules.json           # the active ruleset — storage/rules_store.py
 │   ├── settings.json        # the runtime overlay — config/overrides.py
 │   └── models/              # downloaded YOLO weights, cached after first use
-└── output/                  # MEDIASORT_OUTPUT_FOLDER — what the rules produce
+└── output/                  # OUTPUT_FOLDER (a saved setting, never an env var)
     ├── <rule folders>/      # one per matching rule that copied/moved something
     ├── _Review/             # the doubt rule's default folder
     └── _Trash/              # MEDIASORT_TRASH_FOLDER — where `delete` actually goes

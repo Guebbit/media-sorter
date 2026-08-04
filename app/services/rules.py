@@ -67,9 +67,8 @@ def validate_ruleset(ctx: AppContext, check_classes: bool = False) -> RuleSet:
 
 def detector_classes(ctx: AppContext) -> list[str]:
     """Every class a rule can match: what the configured weights can find,
-    plus `video` — the one class no model looks for, since a rule matches a
-    video by its extension instead (`domain.detection.is_video`). Needs the
-    detector installed."""
+    plus `video` — the one class no model looks for, since it is true of a file
+    by its extension (`video.is_video`). Needs the detector installed."""
     # Deferred: `detecting` imports ultralytics/torch, which most calls into
     # this service (validating a rule, moving one) never need to pay to load.
     from ..detecting import available_classes, ensure_available

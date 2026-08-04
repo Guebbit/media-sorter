@@ -12,8 +12,6 @@ Three decisions worth stating:
   changed in the UI that quietly did nothing because `.env` disagreed would be a
   worse surprise than the reverse, and `sources()` reports which layer each
   effective value came from so the UI can show it.
-* For the two folders the environment is not a layer **at all** — see
-  `from_environment`. They are chosen per session, from the CLI or the UI.
 * Values are stored as the same strings the environment would hold, so there is
   exactly one parser (`config.env`) and one validator (`config.sections`). The
   overlay adds a layer, not a second dialect.
@@ -52,16 +50,14 @@ class Editable:
 
     key: str
     label: str
-    #: folders | text | url | bool | number — what the UI should draw, not a type system.
+    #: folders | text | url | bool — what the UI should draw, not a type system.
     kind: str
     help: str = ""
-    #: False when the environment is not a layer for this key at all. Which
-    #: folders to read and where to write are session choices, not properties of
-    #: the machine: they are picked with `mediasort config set`, in the Settings
-    #: tab, or for one run with a `--input` / `--output` flag. An exported
-    #: variable quietly redirecting a scan — or an output tree that deletions
-    #: are recorded against — is a worse failure than having to name the folder.
-    from_environment: bool = True
+    #: How to describe the value the settings derive when nothing is stored, for
+    #: a form to show as a placeholder. Its presence also means "leave the field
+    #: empty until someone fills it in": a derived path sitting in the box looks
+    #: like a choice that was made, and clearing the box is how it is undone.
+    derived: str = ""
 
 
 EDITABLE: tuple[Editable, ...] = (
@@ -69,7 +65,6 @@ EDITABLE: tuple[Editable, ...] = (
         "INPUT_FOLDERS", "Input folders", "folders",
         "The folders to index. Anything already indexed from a folder you remove "
         "stays in the database.",
-        from_environment=False,
     ),
     Editable(
         "OUTPUT_FOLDER", "Output folder", "text",
@@ -77,7 +72,20 @@ EDITABLE: tuple[Editable, ...] = (
         "a 'Sorted' subfolder of your first photo folder, so results land next to "
         "the photos they came from. Only a 'move' rule puts originals in here; "
         "'copy' leaves them where they are.",
-        from_environment=False,
+        derived="a 'Sorted' folder inside your first input folder",
+    ),
+    Editable(
+        "DUPES_FOLDERS", "Folders to check for duplicates", "folders",
+        "Where the duplicate finder looks. Nothing to do with the sorting "
+        "folders above: checking a folder for duplicates does not add it to the "
+        "library, and does not run the detector over it.",
+    ),
+    Editable(
+        "DUPES_SAVE_INDEX", "Remember the duplicate scan", "bool",
+        "Off by default, so a duplicate check leaves nothing behind. Turn it on "
+        "for a folder big enough that re-hashing it every time is a chore — the "
+        "hashes are then kept in a hidden '.mediasort' folder inside it, "
+        "separately from the sorting index.",
     ),
     Editable(
         "OLLAMA_URL", "Ollama URL", "url",
@@ -87,12 +95,17 @@ EDITABLE: tuple[Editable, ...] = (
         "OLLAMA_MODEL", "Vision model", "text",
         "Any vision-capable model installed in that Ollama.",
     ),
+    Editable(
+        "SAVE_INDEX", "Remember this library", "bool",
+        "Off by default: the tool works out what is in your photos, sorts them, and "
+        "leaves nothing behind. Turn it on for a folder large enough that you would "
+        "not want to redo the detection — what it has learned is then saved in a "
+        "hidden '.mediasort' folder inside that library, so a second run picks up "
+        "where the first stopped. One per library; other folders are unaffected.",
+    ),
 )
 
 BY_KEY = {field.key: field for field in EDITABLE}
-
-#: Keys `config.env` must not read from `os.environ`, whatever `.env` says.
-NO_ENVIRONMENT = frozenset(field.key for field in EDITABLE if not field.from_environment)
 
 
 def _require_known(key: str) -> Editable:
@@ -125,18 +138,10 @@ def normalize(key: str, value: Any) -> str:
         return ",".join(str(Path(f).expanduser()) for f in folders)
 
     if field.kind == "bool":
+        # A checkbox sends a real boolean; `config set` and `.env` send a string.
         if isinstance(value, str):
             return "1" if value.strip().lower() in TRUTHY_STRINGS else "0"
         return "1" if value else "0"
-
-    if field.kind == "number":
-        try:
-            number = float(value)
-        except (TypeError, ValueError):
-            raise ConfigError(f"{field.label} must be a number, got {value!r}") from None
-        if not 0.0 <= number <= 1.0:
-            raise ConfigError(f"{field.label} must be between 0 and 1, got {number!r}")
-        return str(number)
 
     text = str(value).strip()
     if not text:

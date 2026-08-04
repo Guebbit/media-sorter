@@ -67,7 +67,7 @@ def verdicts(counts: Mapping[str, int]) -> None:
 
 def dry_run(stats: ApplyStats, planned: Sequence[PlannedAction]) -> None:
     """`apply --dry-run`'s output: a per-action tally, a sample of the actual
-    planned steps, and a note about anything a missing `--yes` withheld."""
+    planned steps, and a note about anything whose original is already gone."""
     table = Table(title="dry run — nothing was changed", box=None, title_justify="left")
     table.add_column("action", style="bold")
     table.add_column("images", justify="right")
@@ -80,8 +80,8 @@ def dry_run(stats: ApplyStats, planned: Sequence[PlannedAction]) -> None:
         console.print(f"  [dim]… and {len(planned) - DRY_RUN_SAMPLE} more[/dim]")
     if stats.skipped:
         console.print(
-            f"[yellow]{stats.skipped} action(s) that move or remove originals would be "
-            f"skipped — pass --yes and enable them in the configuration[/yellow]"
+            f"[yellow]{stats.skipped} action(s) would be skipped — their original is "
+            f"already gone from where the index expects it[/yellow]"
         )
 
 

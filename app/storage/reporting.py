@@ -95,6 +95,16 @@ class Reporting:
             (limit,),
         ).fetchall()
 
+    def phashes(self) -> list[sqlite3.Row]:
+        """Every present, non-deleted image with a perceptual hash — id,
+        path, filename, size, dimensions, capture date, and the hash itself.
+        What the near-duplicate grouper (`domain.similarity.cluster`) reads
+        before clustering."""
+        return self._engine.conn.execute(
+            "SELECT id, path, filename, size, width, height, taken_at, phash FROM images "
+            "WHERE missing = 0 AND deleted = 0 AND phash IS NOT NULL"
+        ).fetchall()
+
     def samples(self, category: str | None = None, limit: int = 60) -> list[dict[str, Any]]:
         """A page of categorised images, for a UI that wants to show its work."""
         sql = ("SELECT id, path, filename, category, action, needs_review FROM images "

@@ -174,7 +174,7 @@ def test_dropping_a_folder_prunes_the_output_it_produced(ctx, storage, library_r
     output_copy = ctx.settings.output.folder / "leftover.jpg"
     output_copy.parent.mkdir(parents=True, exist_ok=True)
     output_copy.write_bytes(b"stand-in for a real copy")
-    storage.links.record([(row.id, str(output_copy), "copy")])
+    storage.links.record([(row.id, str(output_copy))])
     assert output_copy.exists()
 
     elsewhere = _pointed_elsewhere(ctx, tmp_path=library_root.parent)

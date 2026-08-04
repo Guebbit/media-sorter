@@ -352,7 +352,7 @@ def test_reorder_moves_a_rule_and_clamps():
 def test_the_doubt_rule_is_added_to_a_file_that_has_none():
     """Every library has an answer to "what about the ones you are unsure of".
     A file predating the rule gets the default rather than losing the answer."""
-    ruleset = RuleSet.from_json({"version": 1, "rules": [
+    ruleset = RuleSet.from_json({"rules": [
         {"name": "cat", "when": {"class": "cat"}, "action": "copy"},
     ]})
     assert ruleset.names() == ["cat", "in-doubt"]
@@ -361,7 +361,7 @@ def test_the_doubt_rule_is_added_to_a_file_that_has_none():
 
 
 def test_the_doubt_rule_is_kept_last_and_only_once():
-    ruleset = RuleSet.from_json({"version": 1, "rules": [
+    ruleset = RuleSet.from_json({"rules": [
         {"name": "in-doubt", "when": {"in_doubt": True}, "action": "copy"},
         {"name": "cat", "when": {"class": "cat"}, "action": "copy"},
     ]})
@@ -380,7 +380,7 @@ def test_the_doubt_rule_never_wins_an_ordinary_match():
 def test_the_doubt_rule_refuses_to_delete():
     from app.actions.registry import default_registry
 
-    ruleset = RuleSet.from_json({"version": 1, "rules": [
+    ruleset = RuleSet.from_json({"rules": [
         {"name": "in-doubt", "when": {"in_doubt": True}, "action": "delete"},
     ]})
     with pytest.raises(RuleError, match="must be one of"):
@@ -403,3 +403,43 @@ def test_the_doubt_rule_survives_a_round_trip():
     reloaded = RuleSet.from_json(ruleset.to_json())
     assert reloaded.names() == ruleset.names()
     assert reloaded.for_doubt() == ruleset.for_doubt()
+
+
+# ------------------------------------------------------- strict field checking
+
+
+def test_an_unknown_field_in_the_rules_file_is_refused():
+    """No reader for any older shape exists, so a stray top-level key is a
+    mistake rather than something to skip past."""
+    with pytest.raises(RuleError, match="unknown field"):
+        RuleSet.from_json({"version": 1, "rules": []})
+
+
+def test_an_unknown_field_on_a_rule_is_refused():
+    with pytest.raises(RuleError, match="unknown field"):
+        RuleSet.from_json({"rules": [
+            {"name": "cat", "when": {"class": "cat"}, "actoin": "copy"},
+        ]})
+
+
+def test_an_unknown_field_on_a_class_condition_is_refused():
+    with pytest.raises(RuleError, match="unknown field"):
+        RuleSet.from_json({"rules": [
+            {"name": "cat", "when": {"class": "cat", "min_confidance": 0.5}},
+        ]})
+
+
+def test_a_review_field_on_any_detection_is_refused():
+    """`AnyDetection` keeps no per-class band, so these two would be parsed by
+    `_parse_class` and then dropped — refused instead of silently ignored."""
+    with pytest.raises(RuleError, match="unknown field"):
+        RuleSet.from_json({"rules": [
+            {"name": "any", "when": {"any_detection": True, "ollama_review": False}},
+        ]})
+
+
+def test_an_unknown_field_beside_a_composite_is_refused():
+    with pytest.raises(RuleError, match="unknown field"):
+        RuleSet.from_json({"rules": [
+            {"name": "both", "when": {"all_of": ["cat", "dog"], "min_count": 2}},
+        ]})

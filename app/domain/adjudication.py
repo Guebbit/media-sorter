@@ -15,8 +15,7 @@ from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 from .detection import Detection
-from .rules import (ClassBand, DEFAULT_CONFIDENCE, DEFAULT_OLLAMA_REVIEW,
-                    DEFAULT_REVIEW_CONFIDENCE, RuleSet)
+from .rules import RuleSet
 
 #: The three answers a second opinion may give. `UNSURE` is a real answer, not a
 #: failure: an image nobody can settle is precisely the one worth a human.
@@ -24,10 +23,6 @@ PRESENT = "present"
 ABSENT = "absent"
 UNSURE = "unsure"
 VERDICTS = (PRESENT, ABSENT, UNSURE)
-
-#: What a class with no band at all gets — one a rule no longer mentions
-#: (deleted since the detection was made), but the row still carries.
-_DEFAULT_BAND = ClassBand(DEFAULT_CONFIDENCE, DEFAULT_REVIEW_CONFIDENCE, DEFAULT_OLLAMA_REVIEW)
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,22 +55,11 @@ def uncertain_classes(detections: Sequence[Detection], ruleset: RuleSet) -> list
     and banded for a second opinion at all.
 
     A class whose band turns `ollama_review` off stays out of this list even
-    while borderline — it still raises `needs_review` in `decide`, which reads
-    the band the same way but does not care about the toggle, so it is left
-    flagged for a person instead of a second opinion.
+    while borderline — it still raises `needs_review` in `decide`, which asks
+    the same question without `escalatable_only`, so it is left flagged for a
+    person instead of a second opinion.
     """
-    bands = ruleset.class_bands()
-
-    def band(cls: str) -> ClassBand:
-        return bands.get(cls, _DEFAULT_BAND)
-
-    confident = {d.cls for d in detections if d.confidence >= band(d.cls).confidence}
-    borderline = {
-        d.cls for d in detections
-        if band(d.cls).review_confidence <= d.confidence < band(d.cls).confidence
-        and band(d.cls).ollama_review
-    }
-    return sorted(borderline - confident)
+    return sorted(ruleset.class_bands().unsettled(detections, escalatable_only=True))
 
 
 def adjudicated(detections: Sequence[Detection], adjudications: Iterable[Adjudication],
@@ -100,17 +84,13 @@ def adjudicated(detections: Sequence[Detection], adjudications: Iterable[Adjudic
         return tuple(detections)
 
     bands = ruleset.class_bands()
-
-    def band(cls: str) -> ClassBand:
-        return bands.get(cls, _DEFAULT_BAND)
-
     kept: list[Detection] = []
     promoted: set[str] = set()
     # Highest confidence first, so "the best borderline box" is simply the first
     # one of its class we meet.
     for detection in sorted(detections, key=lambda d: d.confidence, reverse=True):
         verdict = by_class.get(detection.cls)
-        threshold = band(detection.cls).confidence
+        threshold = bands.for_class(detection.cls).confidence
         if verdict is None or detection.confidence >= threshold:
             kept.append(detection)
             continue

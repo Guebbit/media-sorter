@@ -59,6 +59,13 @@ class ImageRepository:
             "SELECT id, size, mtime, hash FROM images WHERE path = ?", (path,)
         ).fetchone()
 
+    def path_of(self, image_id: int) -> str | None:
+        """The current path for `image_id`, or None if the row doesn't exist
+        — for a caller that only has an id (not a full row) and needs to
+        touch the file itself."""
+        row = self._conn.execute("SELECT path FROM images WHERE id = ?", (image_id,)).fetchone()
+        return row["path"] if row else None
+
     def flag_root_missing(self, root: str) -> None:
         """Mark everything under a root as missing; the scan clears what it finds."""
         with self._engine.write() as conn:
@@ -100,7 +107,7 @@ class ImageRepository:
         now = time.time()
         payload = [
             (
-                r["path"], r["filename"], r["root"], r["hash"], r["size"], r["mtime"],
+                r["path"], r["filename"], r["root"], r["hash"], r["phash"], r["size"], r["mtime"],
                 r["width"], r["height"], r["format"], r["taken_at"], now, now,
             )
             for r in rows
@@ -110,13 +117,14 @@ class ImageRepository:
         with self._engine.write() as conn:
             conn.executemany(
                 """
-                INSERT INTO images (path, filename, root, hash, size, mtime, width, height,
+                INSERT INTO images (path, filename, root, hash, phash, size, mtime, width, height,
                                     format, taken_at, first_seen, updated_at, missing)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0)
                 ON CONFLICT(path) DO UPDATE SET
-                    hash=excluded.hash, size=excluded.size, mtime=excluded.mtime,
-                    width=excluded.width, height=excluded.height, format=excluded.format,
-                    taken_at=excluded.taken_at, updated_at=excluded.updated_at,
+                    hash=excluded.hash, phash=excluded.phash, size=excluded.size,
+                    mtime=excluded.mtime, width=excluded.width, height=excluded.height,
+                    format=excluded.format, taken_at=excluded.taken_at,
+                    updated_at=excluded.updated_at,
                     missing=0, deleted=0, category=NULL, action=NULL,
                     needs_review=0, error=NULL, detect_state=0, analyze_state=0
                 """,
@@ -372,8 +380,8 @@ class ImageRepository:
     def iter_actionable(self) -> Iterator[sqlite3.Row]:
         """Every categorised image, in a stable order.
 
-        Rules decide what happens — including "nothing" — so the filtering that
-        used to live in SQL now belongs to the action registry. Rows already
+        Rules decide what happens — including "nothing" — so the filtering
+        belongs to the action registry rather than to SQL. Rows already
         deleted or gone from disk are excluded.
         """
         yield from self._conn.execute(

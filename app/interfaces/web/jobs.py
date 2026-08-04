@@ -69,6 +69,18 @@ class JobRunner:
             self._thread.start()
             return True
 
+    def phase(self, name: str) -> None:
+        """Rename the running job, from inside it.
+
+        For a job that is several of the others back to back: the page
+        attributes progress bars and result lines by `name`, so a composite
+        job has to *be* the scan while it scans and the apply while it
+        applies, or its progress renders nowhere.
+        """
+        self.state = name
+        self.name = name
+        self.message = f"{name} started"
+
     def snapshot(self) -> dict[str, Any]:
         """The current job state as plain data, for `WebApi.get_stats`."""
         busy = self.busy

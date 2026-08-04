@@ -13,8 +13,9 @@ from .adjudication import (ABSENT, PRESENT, UNSURE, VERDICTS, Adjudication, adju
                            uncertain_classes)
 from .decision import Decision, decide
 from .detection import Detection
+from .similarity import cluster, hamming
 
 __all__ = [
     "ABSENT", "PRESENT", "UNSURE", "VERDICTS", "Adjudication", "Decision", "Detection",
-    "adjudicated", "decide", "uncertain_classes",
+    "adjudicated", "cluster", "decide", "hamming", "uncertain_classes",
 ]
