@@ -21,12 +21,17 @@ from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
 from ...errors import MediaSortError
-from ...services import AppContext
+from ...services import AppContext, duplicates
 from .api import WebApi
 
 log = logging.getLogger(__name__)
 
-PAGE = Path(__file__).parent / "static" / "webui.html"
+STATIC = Path(__file__).parent / "static"
+#: The two pages this server hosts. Separate documents rather than tabs of one:
+#: sorting a library and de-duplicating a folder are different jobs over
+#: different folders, and neither should load the other's state to be used.
+PAGE = STATIC / "webui.html"
+DUPES_PAGE = STATIC / "dupes.html"
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -45,11 +50,17 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _send(self, payload: Any, status: int = 200) -> None:
         """Write `payload` as a JSON response."""
-        self._respond(json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8", status)
+        self._respond(
+            json.dumps(payload).encode("utf-8"), "application/json; charset=utf-8", status
+        )
 
     def _send_html(self, html: str) -> None:
         """Write `html` as a 200 HTML response — used for the single-page app."""
         self._respond(html.encode("utf-8"), "text/html; charset=utf-8", 200)
+
+    def _send_image(self, body: bytes, content_type: str) -> None:
+        """Write `body` as a 200 image response — the original or a thumbnail."""
+        self._respond(body, content_type, 200)
 
     def _respond(self, body: bytes, content_type: str, status: int) -> None:
         """Write the status line, headers and body of one HTTP response."""
@@ -101,8 +112,9 @@ class _Handler(BaseHTTPRequestHandler):
             """This request's path->handler mapping, built fresh each call so
             `query` is captured from the URL actually being served."""
             return {
-                "/": lambda: self._send_html(_page()),
-                "/index.html": lambda: self._send_html(_page()),
+                "/": lambda: self._send_html(_page(PAGE)),
+                "/index.html": lambda: self._send_html(_page(PAGE)),
+                "/duplicates": lambda: self._send_html(_page(DUPES_PAGE)),
                 "/api/rules": lambda: self._send(api.get_rules()),
                 "/api/meta": lambda: self._send(api.get_meta()),
                 "/api/stats": lambda: self._send(api.get_stats()),
@@ -115,9 +127,35 @@ class _Handler(BaseHTTPRequestHandler):
                 "/api/ollama/models": lambda: self._send(
                     api.get_vision_models((query.get("url") or [None])[0])
                 ),
+                "/api/duplicates": lambda: self._send(api.get_duplicate_groups(
+                    int((query.get("distance") or [duplicates.DEFAULT_MAX_DISTANCE])[0]),
+                    int((query.get("limit") or [200])[0]),
+                )),
+                "/api/dupes/config": lambda: self._send(api.get_dupes_config()),
+                "/api/job": lambda: self._send(api.get_job()),
+                "/api/dupes/image": lambda: self._send_image(
+                    *api.dupe_image_bytes(int(query["id"][0]))
+                ),
+                "/api/dupes/thumbnail": lambda: self._send_image(
+                    *api.dupe_thumbnail_bytes(
+                        int(query["id"][0]), int((query.get("size") or [240])[0])
+                    )
+                ),
+                "/api/image": lambda: self._send_image(
+                    *api.image_bytes(int(query["id"][0]))
+                ),
+                "/api/thumbnail": lambda: self._send_image(
+                    *api.thumbnail_bytes(
+                        int(query["id"][0]), int((query.get("size") or [240])[0])
+                    )
+                ),
             }
 
-        self._dispatch(routes, parsed.path)
+        # `/api/image` and `/api/thumbnail` need a required `id` query param —
+        # the first GET routes for which a missing/bad param is a client
+        # mistake (400), not a server bug (500), so this catches the same
+        # exceptions POST already does for a malformed body.
+        self._dispatch(routes, parsed.path, catch=(MediaSortError, KeyError, ValueError))
 
     def do_POST(self) -> None:  # noqa: N802
         """Every mutating route: rule edits, settings edits, and starting a job."""
@@ -138,10 +176,21 @@ class _Handler(BaseHTTPRequestHandler):
                 "/api/run/pipeline": lambda: self._send(
                     {"started": api.start_pipeline(bool(payload.get("analyze", True)))}
                 ),
-                "/api/run/apply": lambda: self._send(
-                    {"started": api.start_apply(bool(payload.get("confirmed", False)))}
-                ),
+                "/api/run/apply": lambda: self._send({"started": api.start_apply()}),
+                "/api/run/all": lambda: self._send({"started": api.start_everything(
+                    bool(payload.get("analyze", True)),
+                )}),
                 "/api/run/recheck": lambda: self._send({"started": api.start_recheck()}),
+                "/api/dupes/scan": lambda: self._send({"started": api.start_dupes_scan()}),
+                "/api/dupes/discard": lambda: self._send(
+                    api.discard_marked_duplicates(bool(payload.get("delete", False)))
+                ),
+                "/api/duplicates/mark": lambda: self._send(
+                    api.mark_duplicates(payload["image_ids"], payload.get("mark"))
+                ),
+                "/api/duplicates/dismiss": lambda: self._send(
+                    api.dismiss_duplicates(payload["image_ids"])
+                ),
                 "/api/settings": lambda: self._send(api.put_settings(payload)),
                 "/api/settings/reset": lambda: self._send(api.reset_settings(payload)),
             }
@@ -172,7 +221,7 @@ def serve(ctx: AppContext) -> None:
         server.shutdown()
 
 
-@lru_cache(maxsize=1)
-def _page() -> str:
-    """Read the page once, on first request rather than at import time."""
-    return PAGE.read_text(encoding="utf-8")
+@lru_cache(maxsize=4)
+def _page(path: Path) -> str:
+    """Read a page once, on first request rather than at import time."""
+    return path.read_text(encoding="utf-8")

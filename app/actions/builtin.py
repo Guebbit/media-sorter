@@ -101,6 +101,23 @@ class MoveAction(Action):
 # ------------------------------------------------------------------ delete
 
 
+def plan_delete(image_id: int, path: str, ctx: ActionContext) -> PlannedAction:
+    """One deletion: a mirrored path in the trash folder.
+
+    Mirrors the original folder structure inside the trash so two files with
+    the same name cannot overwrite each other. Module-level like `plan_copy`,
+    for the same reason: a manual, one-off discard (`services.duplicates`)
+    needs to plan the same move without a `Rule` to plan it against.
+    """
+    relative = filesystem.relative_to_any(path, ctx.input_roots)
+    # No `detail`: it is only ever read as a fallback for a missing `target`
+    # (see `executor._execute`), and a deletion always has one — the trash path
+    # the file is about to occupy, which is the more useful thing to log anyway.
+    return PlannedAction(
+        image_id, DeleteAction.name, path, str(ctx.output.trash_folder / relative)
+    )
+
+
 class DeleteAction(Action):
     """Remove the original — to the trash folder, so it stays recoverable."""
 
@@ -111,21 +128,8 @@ class DeleteAction(Action):
 
     def plan(self, ctx: ActionContext, target: ImageTarget, rule: Rule,
              namer: NameAllocator) -> list[PlannedAction]:
-        """One deletion: a mirrored path in the trash folder.
-
-        Mirrors the original folder structure inside the trash so two files
-        with the same name cannot overwrite each other.
-        """
-        relative = filesystem.relative_to_any(target.path, ctx.input_roots)
-        return [
-            PlannedAction(
-                target.image_id,
-                self.name,
-                target.path,
-                str(ctx.output.trash_folder / relative),
-                "trash",
-            )
-        ]
+        """One deletion, via `plan_delete`."""
+        return [plan_delete(target.image_id, target.path, ctx)]
 
     def execute(self, ctx: ActionContext, planned: PlannedAction) -> bool:
         """Move to trash. False if already gone."""

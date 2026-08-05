@@ -37,12 +37,13 @@ class ScanStats:
 
 def _build_row(path: str, stat: os.stat_result, root: str) -> dict:
     """Everything the index stores about a file, for a file worth reading."""
-    meta = imaging.probe(path)
+    meta, phash = imaging.inspect(path)
     return {
         "path": path,
         "filename": os.path.basename(path),
         "root": root,
         "hash": filesystem.sha256_file(path),
+        "phash": phash,
         "size": stat.st_size,
         "mtime": stat.st_mtime,
         "width": meta.width,

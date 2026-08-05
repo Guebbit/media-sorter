@@ -178,18 +178,20 @@ def test_source_is_reported_per_key(env, monkeypatch):
     assert source_of("OUTPUT_FOLDER") == "settings"  # the fixture saves it
 
 
-def test_a_folder_is_never_reported_as_coming_from_the_environment(env, monkeypatch):
-    """Even with the variable exported, `.env` is not a layer for these two."""
+def test_a_folder_set_in_the_environment_is_reported_as_coming_from_there(env, monkeypatch):
+    """The folders read the same three layers as every other key."""
     monkeypatch.setenv("MEDIASORT_INPUT_FOLDERS", "/stale")
     overrides.clear(settings_file(), ["INPUT_FOLDERS"])
-    assert source_of("INPUT_FOLDERS") == "default"
+    assert source_of("INPUT_FOLDERS") == "environment"
 
 
 # ------------------------------------------------------- the folders, specifically
 
 
-def test_the_environment_cannot_set_the_folders(env, monkeypatch, tmp_path, library_root):
-    """The variables used to work, so a leftover export must not silently win."""
+def test_the_saved_overlay_still_beats_the_environment_for_the_folders(env, monkeypatch,
+                                                                      tmp_path, library_root):
+    """The overlay wins over the environment here exactly as it does everywhere
+    else — a folder chosen in the UI is not undone by a stale export."""
     monkeypatch.setenv("MEDIASORT_INPUT_FOLDERS", str(tmp_path / "elsewhere"))
     monkeypatch.setenv("MEDIASORT_OUTPUT_FOLDER", str(tmp_path / "elsewhere-out"))
 
@@ -197,6 +199,19 @@ def test_the_environment_cannot_set_the_folders(env, monkeypatch, tmp_path, libr
 
     assert settings.library.input_folders == (library_root,)
     assert settings.output.folder == tmp_path / "output"
+
+
+def test_the_environment_sets_the_folders_when_nothing_is_saved(env, monkeypatch, tmp_path):
+    """With no overlay entry, the exported variable is the answer — the folders
+    are ordinary settings, not a special case that silently ignores you."""
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    overrides.clear(settings_file(), ["INPUT_FOLDERS", "OUTPUT_FOLDER"])
+    monkeypatch.setenv("MEDIASORT_INPUT_FOLDERS", str(elsewhere))
+
+    settings = load_settings()
+
+    assert settings.library.input_folders == (elsewhere,)
 
 
 def test_an_unconfigured_library_still_loads(env, monkeypatch):

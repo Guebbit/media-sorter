@@ -4,6 +4,10 @@ One model instance, batched inference. Images are decoded on a thread pool
 while the GPU works on the previous batch, which is where the throughput comes
 from. Nothing here knows about categories, rules or the semantic pass — it turns
 paths into boxes.
+
+A video is the same work in a different shape: `detect_video` samples stills
+across the file and runs them as one batch, then hands the frames' boxes to
+`merge_frames` for the single answer the index has room for.
 """
 
 from __future__ import annotations
@@ -15,9 +19,9 @@ from typing import Iterable, Sequence
 
 import numpy as np
 
-from .. import imaging
+from .. import imaging, video
 from ..config import DetectSettings
-from ..domain.detection import Detection
+from ..domain.detection import Detection, merge_frames
 
 log = logging.getLogger(__name__)
 
@@ -89,9 +93,8 @@ class Detector:
         `conf_floor` is the lowest `review_confidence` any class in the active
         ruleset asks for — the most permissive floor, so nothing any rule's
         band needs gets filtered out by YOLO before it ever reaches the
-        decision layer. It used to be the single global `REVIEW_CONFIDENCE`;
-        now that bands are per-class, the caller (`services.processing`)
-        computes it from `RuleSet.class_bands()`.
+        decision layer. Bands are per class, so the caller
+        (`services.processing`) computes it from `RuleSet.class_bands()`.
 
         This is the one place `ultralytics.YOLO(...)` is instantiated: it reads
         the weights file at `self.model_path` into (typically) GPU memory, which
@@ -130,11 +133,18 @@ class Detector:
         self._pool.shutdown(wait=False)
 
     def _load(self, path: str) -> np.ndarray | None:
-        """One image, decoded to an RGB array ready for `model.predict`.
+        """One image, decoded to a BGR array ready for `model.predict`.
         None on any decode failure, so one corrupt file only drops itself from
-        the batch instead of raising out of the thread pool."""
+        the batch instead of raising out of the thread pool.
+
+        BGR, not the RGB Pillow hands back: ultralytics reads a numpy array the
+        way OpenCV wrote it (`LoadPilAndNumpy._single_check` — "NumPy color
+        inputs are assumed to use OpenCV-compatible BGR order"), so passing RGB
+        silently swaps red and blue on every photo and costs accuracy for free.
+        Video frames arrive from `video` in that order already.
+        """
         try:
-            return np.asarray(imaging.load_rgb(path))
+            return np.ascontiguousarray(np.asarray(imaging.load_rgb(path))[:, :, ::-1])
         except Exception as exc:  # noqa: BLE001 - one bad file must not stop a batch
             log.warning("cannot decode %s: %s", path, exc)
             return None
@@ -142,11 +152,10 @@ class Detector:
     def detect_batch(self, paths: list[str]) -> dict[str, list[Detection] | None]:
         """Run YOLO inference on every image in `paths`, once, as one batch.
 
-        None means the image could not be read — the caller records an error.
-        Decoding happens on the thread pool first (see `_load`) so `.predict()`
-        below is handed ready-made numpy arrays; that call is the only point
-        this class talks to the GPU (or CPU) — a single forward pass over the
-        whole batch, not one call per image.
+        Still images only — the stage sends videos to `detect_video` instead.
+        None means the image could not be read; the caller records an error.
+        Decoding happens on the thread pool first (see `_load`) so `_predict`
+        is handed ready-made numpy arrays.
         """
         images = list(self._pool.map(self._load, paths))
         usable = [(path, array) for path, array in zip(paths, images) if array is not None]
@@ -156,8 +165,39 @@ class Detector:
         if not usable:
             return results
 
+        for (path, _), detections in zip(usable, self._predict([a for _, a in usable])):
+            results[path] = detections
+        return results
+
+    def detect_video(self, path: str) -> list[Detection] | None:
+        """What is in one video, from `settings.video_frames` stills of it.
+
+        The frames are a batch like any other — one predict call for the whole
+        file — so a video costs what that many photos cost, and `merge_frames`
+        collapses the per-frame boxes into the one answer the index stores per
+        file. Sampling and merging both live behind this method so the stage
+        above never learns that a video is more than one inference.
+
+        None means no frame could be read at all: a container OpenCV will not
+        open, a truncated download. Not an error — the file is still a video,
+        and the caller falls back to saying only that.
+        """
+        try:
+            frames = video.sample_frames(path, self.settings.video_frames)
+        except Exception as exc:  # noqa: BLE001 - one bad video must not stop a batch
+            log.warning("cannot sample %s: %s", path, exc)
+            return None
+        return merge_frames(self._predict(frames))
+
+    def _predict(self, images: list[np.ndarray]) -> list[list[Detection]]:
+        """One forward pass over `images` (BGR arrays), as a single batch.
+
+        The only point this class talks to the GPU (or CPU), for photos and for
+        video frames alike — batching is the whole reason this is one call and
+        not one per image.
+        """
         predictions = self.model.predict(
-            [array for _, array in usable],
+            images,
             # Keep borderline hits: the review flag is computed from them.
             conf=self.conf_floor,
             classes=self.class_ids,
@@ -166,10 +206,7 @@ class Detector:
             verbose=False,
             stream=False,
         )
-
-        for (path, _), prediction in zip(usable, predictions):
-            results[path] = self._to_detections(prediction)
-        return results
+        return [self._to_detections(prediction) for prediction in predictions]
 
     def _to_detections(self, prediction) -> list[Detection]:
         """One YOLO `Results` object (ultralytics' own prediction type) turned

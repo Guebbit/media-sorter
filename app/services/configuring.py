@@ -19,15 +19,31 @@ from ..errors import ConfigError
 from .context import AppContext
 
 
+#: How to read each editable key's live value back off a `Settings`. Keyed by
+#: the same `Editable.key` that declares the field, and checked against
+#: `overrides.EDITABLE` on import — a key added to one and forgotten in the
+#: other used to surface as a `KeyError` from whichever endpoint happened to
+#: render the form first.
+_READERS: dict[str, Any] = {
+    "INPUT_FOLDERS": lambda s: [str(folder) for folder in s.library.input_folders],
+    "OUTPUT_FOLDER": lambda s: str(s.output.folder),
+    "DUPES_FOLDERS": lambda s: [str(folder) for folder in s.dupes.folders],
+    "DUPES_SAVE_INDEX": lambda s: s.dupes.database is not None,
+    "OLLAMA_URL": lambda s: s.analyze.url,
+    "OLLAMA_MODEL": lambda s: s.analyze.model,
+    # What the form should show is whether an index is actually being kept,
+    # which an explicitly configured `DB` path can turn on by itself.
+    "SAVE_INDEX": lambda s: s.paths.database is not None,
+}
+
+assert {field.key for field in overrides.EDITABLE} == set(_READERS), (
+    "every overrides.EDITABLE field needs a reader in configuring._READERS"
+)
+
+
 def _effective(ctx: AppContext) -> dict[str, Any]:
     """The live value of every editable key, in the shape a form wants."""
-    settings = ctx.settings
-    return {
-        "INPUT_FOLDERS": [str(folder) for folder in settings.library.input_folders],
-        "OUTPUT_FOLDER": str(settings.output.folder),
-        "OLLAMA_URL": settings.analyze.url,
-        "OLLAMA_MODEL": settings.analyze.model,
-    }
+    return {key: read(ctx.settings) for key, read in _READERS.items()}
 
 
 def _source(field: overrides.Editable, value: Any, stored: Mapping[str, str]) -> str:
@@ -43,10 +59,25 @@ def _source(field: overrides.Editable, value: Any, stored: Mapping[str, str]) ->
     return env_config.source_of(field.key, stored)
 
 
+def _shown(field: overrides.Editable, value: Any, source: str) -> Any:
+    """`value` as the form should hold it.
+
+    A setting the settings themselves derived is shown empty, with `derived`
+    describing it as a placeholder instead: the output folder follows the first
+    photo folder until someone says otherwise, and a form that prefills the
+    derived path cannot tell "left alone" from "typed by hand" — nor offer
+    emptying the box as the way back to the default.
+    """
+    return "" if field.derived and source == "default" else value
+
+
 def describe(ctx: AppContext) -> dict[str, Any]:
     """Everything a settings form needs: the fields, the values, the provenance."""
     stored = overrides.load(ctx.settings.paths.settings)
     values = _effective(ctx)
+    sources = {
+        field.key: _source(field, values[field.key], stored) for field in overrides.EDITABLE
+    }
     return {
         "fields": [
             {
@@ -54,8 +85,9 @@ def describe(ctx: AppContext) -> dict[str, Any]:
                 "label": field.label,
                 "kind": field.kind,
                 "help": field.help,
-                "value": values[field.key],
-                "source": _source(field, values[field.key], stored),
+                "value": _shown(field, values[field.key], sources[field.key]),
+                "placeholder": field.derived,
+                "source": sources[field.key],
             }
             for field in overrides.EDITABLE
         ],

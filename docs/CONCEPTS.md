@@ -8,8 +8,10 @@ way it is. For "which file does this" see [ARCHITECTURE.md](ARCHITECTURE.md).
 Point mediasort at a folder of photos. It finds the ones containing whatever
 *you* define — a cat, a dog, a person, a receipt, anything an object detector
 can recognize — and does whatever *you* decide with them: copy into a folder,
-move, delete, or leave alone. Everything runs on your machine, against a
-detector and a vision model you already have installed. Nothing leaves it.
+move, delete, or leave alone. Videos in that folder are sorted the same way,
+by what the detector finds in frames sampled across them. Everything runs on
+your machine, against a detector and a vision model you already have
+installed. Nothing leaves it.
 
 Three ideas make that work:
 
@@ -27,7 +29,9 @@ Three ideas make that work:
 flowchart LR
     A[Photo folders] --> B[Scan]
     B --> C[(Index\nSQLite)]
-    C --> D[Detect\nYOLO]
+    C -->|photos| D[Detect\nYOLO]
+    C -->|videos| V[Sample frames]
+    V --> D
     D -->|confident or clear miss| G[Rules decide]
     D -->|borderline| E[Adjudicate\nOllama: present / absent / unsure]
     E --> G
@@ -40,6 +44,12 @@ flowchart LR
 Solid arrows are the path every photo takes. Dashed arrows are the **semantic
 pass** — optional, and off to the side: it writes a description used by
 `mediasort search`, and never changes where a photo ends up.
+
+A video joins the same path one step later: it cannot be handed to the model
+whole, so a handful of frames are sampled across it first and those go through
+detection as an ordinary batch. Everything downstream — the rules, the review
+flag, the actions — treats the result exactly like a photo's. See
+[Videos](#videos).
 
 The index (a local SQLite database) is what makes every stage resumable.
 Every image has a small state machine per stage — pending, running, done,
@@ -60,7 +70,8 @@ on (or however many a custom model was trained for). It has no idea what a
 
 mediasort loads one YOLO model and runs every photo through it in batches —
 that batching, not the model itself, is most of the throughput. A whole
-library's detection pass typically takes minutes, not hours.
+library's detection pass typically takes minutes, not hours. Videos go through
+the same model, a few sampled frames at a time; see [Videos](#videos).
 
 Two thresholds decide what a detection means:
 
@@ -78,6 +89,59 @@ Two thresholds decide what a detection means:
   second opinion is enabled, escalated to Ollama.
 - **Below `review_confidence`**: not seen at all, as far as anything
   downstream is concerned.
+
+## Videos
+
+A video is not a special kind of file here — it is a file YOLO reaches by a
+different road. Eight stills (`MEDIASORT_DETECT_VIDEO_FRAMES`) are sampled
+across its length and run through the model as one batch, and the video is
+then sorted by what they showed. A clip of your cat lands in `Cat/` next to
+the photos of it.
+
+**Why sample rather than decode everything.** A three-minute clip at 30fps is
+5,400 frames — running the detector on all of them would cost more than the
+entire photo library. Eight is a bargain: enough to catch a subject that is
+only in part of the clip, cheap enough that a video costs what eight photos
+cost. The frames are taken at the *midpoint* of eight equal slices rather than
+evenly from end to end, because the first and last frames of a real video are
+disproportionately black, a fade, or a title card.
+
+**Why one answer per file.** The index stores detections per file, and a video
+is one row — so eight frames' worth of boxes have to collapse into one verdict.
+Per class, the frame that saw the most of it wins, ties going to the more
+confident frame:
+
+- a maximum, not an average, because a dog that walks into shot halfway
+  through is still a dog in that video, and averaging over the frames it is
+  absent from would hide it;
+- the busiest *frame*, not the best *box*, because counts have to survive.
+  Keeping only the single strongest box per class would cap every video at one
+  of everything, and a `min_count: 2` rule could never match one.
+
+The cost of that choice: the box coordinates stored for a video belong to one
+frame, not to the file, and a subject that appears only between two sampled
+frames is missed entirely. Raise the frame count for long clips.
+
+**The `video` class.** Every video also carries a `video` class, at confidence
+1.0, on top of whatever the frames showed. No model looks for it — it is true
+of the file by its extension — so a rule matching `{"class": "video"}` catches
+any video at all. Rules are tried in order, which is what turns that into a
+*fallback*: put the `video` rule below your real classes and the cat video
+sorts as a cat while everything unrecognised still lands in `video/`; put it
+at the top and every video sorts as a video, whatever is in it. Both are
+legitimate, and the difference is one line of `rules.json`.
+
+It is also the whole answer for a video nothing could look inside — a
+container OpenCV will not open, a truncated download. That is not an error:
+the file's extension is still true, so it sorts on that alone rather than
+being parked in the error state.
+
+Ollama sees a video as a single frame from halfway in, for both the second
+opinion and the description pass. A real limitation for anything that only
+makes sense in motion.
+
+`MEDIASORT_DETECT_VIDEO_FRAMES=0` turns all of this off: videos are then
+matched by extension alone, which is faster and blind.
 
 ## The second opinion: adjudication
 

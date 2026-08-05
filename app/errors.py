@@ -29,8 +29,12 @@ class OutputNotWritable(ConfigError):
     """
 
 
-class IncompatibleIndex(MediaSortError, RuntimeError):
-    """The index on disk was written by a different schema version."""
+class VideoError(MediaSortError):
+    """A video file could not be opened, or held no readable frame.
+
+    Never fatal to a run: a video whose frames cannot be read is still a video,
+    so the detect stage falls back to matching it by extension.
+    """
 
 
 class EngineError(MediaSortError, RuntimeError):

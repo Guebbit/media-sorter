@@ -19,7 +19,7 @@ from rich.progress import (BarColumn, MofNCompleteColumn, Progress, SpinnerColum
 
 from ...config import load_settings, overrides
 from ...domain.rules import RuleSet
-from ...errors import ConfigError, IncompatibleIndex, MediaSortError, RuleError
+from ...errors import ConfigError, MediaSortError, RuleError
 from ...pipeline import Stopper
 from ...services import AppContext
 from ...services import rules as rules_service
@@ -80,7 +80,7 @@ def setup(verbose: bool = False, input_folders: list[str] | None = None,
     logging.getLogger("PIL").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-    return run_or_fail(lambda: AppContext.create(settings), catch=IncompatibleIndex)
+    return run_or_fail(lambda: AppContext.create(settings), catch=MediaSortError)
 
 
 def load_rules(ctx: AppContext) -> RuleSet:

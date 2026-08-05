@@ -62,11 +62,12 @@ def populated(ctx):
 def test_builds_the_expected_folders(populated, ruleset):
     output = populated.settings.output.folder
     stats, _ = applying.apply(populated, ruleset)
-    # 3 categorised. The fourth, e.webp, is in doubt and the doubt rule moves by
-    # default — which needs a confirmation this call did not give.
+    # 3 categorised copies. The fourth, e.webp, is in doubt, and the doubt rule
+    # moves by default — so it is relocated rather than copied.
     assert stats.created == 3
-    assert stats.skipped == 1
-    assert sorted(p.name for p in output.iterdir()) == ["Cat", "Cat-Dog", "Dog"]
+    assert stats.moved == 1
+    assert stats.skipped == 0
+    assert sorted(p.name for p in output.iterdir()) == ["Cat", "Cat-Dog", "Dog", "_Review"]
     assert len(list((output / "Cat").iterdir())) == 1
 
 
@@ -80,9 +81,13 @@ def test_copies_are_real_independent_files(populated, ruleset, library_root):
     assert copied.stat().st_mtime == original.stat().st_mtime
 
 
-def test_originals_are_never_touched(populated, ruleset, library_root):
+def test_originals_are_never_touched_by_a_ruleset_that_only_copies(populated, ruleset,
+                                                                   library_root):
+    """`copy` is non-destructive by construction. Scoped to a ruleset with no
+    consuming action in it — including the doubt slot, which moves by default —
+    because `move` and `delete` now run without being asked twice."""
     before = sorted(p.name for p in library_root.rglob("*") if p.is_file())
-    applying.apply(populated, ruleset)
+    applying.apply(populated, with_doubt(ruleset, "copy"))
     assert sorted(p.name for p in library_root.rglob("*") if p.is_file()) == before
 
 
@@ -121,7 +126,7 @@ def test_doubt_set_to_copy_leaves_the_original_and_the_normal_rule_alone(populat
     """A copy can coexist with whatever the matched rule wanted, so both run."""
     populated.storage.images.set_decision(_id_of(populated, "a.jpg"), "cat", "copy", True)
 
-    applying.apply(populated, with_doubt(ruleset, "copy"), confirmed=True)
+    applying.apply(populated, with_doubt(ruleset, "copy"))
     output = populated.settings.output.folder
     assert (output / "_Review" / "a.jpg").is_file()
     assert (output / "Cat" / "a.jpg").is_file()      # still sorted normally
@@ -133,7 +138,7 @@ def test_doubt_set_to_move_takes_the_photo_instead_of_the_normal_rule(populated,
     and cannot be in two at once."""
     populated.storage.images.set_decision(_id_of(populated, "a.jpg"), "cat", "copy", True)
 
-    applying.apply(populated, with_doubt(ruleset, "move"), confirmed=True)
+    applying.apply(populated, with_doubt(ruleset, "move"))
     output = populated.settings.output.folder
     assert (output / "_Review" / "a.jpg").is_file()
     assert not (output / "Cat").exists()             # not filed as a cat
@@ -147,7 +152,7 @@ def test_doubt_set_to_move_runs_before_a_rule_that_would_consume_the_photo(popul
     populated.storage.images.set_decision(_id_of(populated, "a.jpg"), "cat", "move", True)
     rules = RuleSet((Rule("cat", HasClass("cat"), action="move"), doubt_rule("copy")))
 
-    applying.apply(populated, rules, confirmed=True)
+    applying.apply(populated, rules)
     output = populated.settings.output.folder
     assert (output / "_Review" / "a.jpg").is_file()
     assert (output / "Cat" / "a.jpg").is_file()
@@ -168,7 +173,7 @@ def test_doubt_moves_to_review_even_when_the_matched_rule_deletes(ctx, delete_ru
     so the photo ended up neither deleted nor reviewed."""
     library.scan_library(ctx)
     categorise(ctx.storage, {"a.jpg": ("junk", "delete")}, review={"a.jpg"})
-    applying.apply(ctx, delete_rules, confirmed=True)
+    applying.apply(ctx, delete_rules)
     assert (ctx.settings.output.folder / "_Review" / "a.jpg").is_file()
     assert not (library_root / "a.jpg").exists()
 
@@ -247,21 +252,23 @@ def marked_for_moving(ctx):
 
 
 def test_move_relocates_the_original(marked_for_moving, move_rules, library_root):
-    stats, _ = applying.apply(marked_for_moving, move_rules, confirmed=True)
+    stats, _ = applying.apply(marked_for_moving, move_rules)
     assert stats.moved == 2
     assert not (library_root / "a.jpg").exists()
     assert (marked_for_moving.settings.output.folder / "Cat" / "a.jpg").is_file()
 
 
-def test_move_is_blocked_unless_explicitly_allowed(marked_for_moving, move_rules, library_root):
-    stats, _ = applying.apply(marked_for_moving, move_rules, confirmed=False)
-    assert stats.moved == 0
-    assert stats.skipped == 2
-    assert (library_root / "a.jpg").exists()
+def test_move_needs_no_confirmation(marked_for_moving, move_rules, library_root):
+    """A `move` rule consumes the original on an ordinary run: what may happen
+    to an original is settled in the ruleset, not asked again at apply time."""
+    stats, _ = applying.apply(marked_for_moving, move_rules)
+    assert stats.moved == 2
+    assert stats.skipped == 0
+    assert not (library_root / "a.jpg").exists()
 
 
 def test_move_updates_the_index_so_the_photo_is_still_found(marked_for_moving, move_rules):
-    applying.apply(marked_for_moving, move_rules, confirmed=True)
+    applying.apply(marked_for_moving, move_rules)
     moved = marked_for_moving.settings.output.folder / "Cat" / "a.jpg"
     row = marked_for_moving.storage.engine.conn.execute(
         "SELECT path, filename, root, deleted FROM images WHERE filename = 'a.jpg'"
@@ -273,11 +280,11 @@ def test_move_updates_the_index_so_the_photo_is_still_found(marked_for_moving, m
 
 def test_a_second_run_leaves_moved_photos_alone(marked_for_moving, move_rules):
     """No link record to recognise them by, so the check is the path itself."""
-    applying.apply(marked_for_moving, move_rules, confirmed=True)
+    applying.apply(marked_for_moving, move_rules)
     moved = marked_for_moving.settings.output.folder / "Cat" / "a.jpg"
     before = moved.stat().st_mtime_ns
 
-    stats, planned = applying.apply(marked_for_moving, move_rules, confirmed=True)
+    stats, planned = applying.apply(marked_for_moving, move_rules)
     assert stats.moved == 0
     assert not [p for p in planned if p.action == "move"]
     assert moved.stat().st_mtime_ns == before
@@ -287,14 +294,14 @@ def test_a_second_run_leaves_moved_photos_alone(marked_for_moving, move_rules):
 def test_a_doubtful_photo_goes_to_the_doubt_folder_not_its_category(marked_for_moving,
                                                                    move_rules):
     """e.webp needs review, so the doubt rule claims it and Cat/ does not."""
-    applying.apply(marked_for_moving, move_rules, confirmed=True)
+    applying.apply(marked_for_moving, move_rules)
     output = marked_for_moving.settings.output.folder
     assert (output / "_Review" / "e.webp").is_file()
     assert not (output / "Cat" / "e.webp").exists()
 
 
 def test_move_is_recorded_in_the_activity_log(marked_for_moving, move_rules):
-    applying.apply(marked_for_moving, move_rules, confirmed=True)
+    applying.apply(marked_for_moving, move_rules)
     rows = marked_for_moving.storage.engine.conn.execute(
         "SELECT detail FROM action_log WHERE action = 'move'"
     ).fetchall()
@@ -320,16 +327,16 @@ def marked_for_deletion(ctx):
     return ctx
 
 
-def test_deletion_is_blocked_unless_explicitly_allowed(marked_for_deletion, delete_rules,
-                                                       library_root):
-    stats, _ = applying.apply(marked_for_deletion, delete_rules, confirmed=False)
-    assert stats.deleted == 0
-    assert stats.skipped == 2
-    assert (library_root / "a.jpg").exists()
+def test_deletion_needs_no_confirmation(marked_for_deletion, delete_rules, library_root):
+    """Same for `delete`: it runs unprompted, to the trash folder."""
+    stats, _ = applying.apply(marked_for_deletion, delete_rules)
+    assert stats.deleted == 2
+    assert stats.skipped == 0
+    assert not (library_root / "a.jpg").exists()
 
 
 def test_delete_moves_to_trash_by_default(marked_for_deletion, delete_rules, library_root):
-    stats, _ = applying.apply(marked_for_deletion, delete_rules, confirmed=True)
+    stats, _ = applying.apply(marked_for_deletion, delete_rules)
     assert stats.deleted == 2
     assert not (library_root / "a.jpg").exists()
     assert (marked_for_deletion.settings.output.trash_folder / "a.jpg").exists()  # recoverable
@@ -338,37 +345,36 @@ def test_delete_moves_to_trash_by_default(marked_for_deletion, delete_rules, lib
 def test_trash_preserves_the_folder_structure(ctx, delete_rules):
     library.scan_library(ctx)
     categorise(ctx.storage, {"c.png": ("junk", "delete")})
-    applying.apply(ctx, delete_rules, confirmed=True)
+    applying.apply(ctx, delete_rules)
     assert (ctx.settings.output.trash_folder / "sub" / "c.png").exists()
 
 
 def test_deleted_images_are_recorded_and_not_reprocessed(marked_for_deletion, delete_rules):
     storage = marked_for_deletion.storage
-    applying.apply(marked_for_deletion, delete_rules, confirmed=True)
+    applying.apply(marked_for_deletion, delete_rules)
     assert storage.images.count("deleted = 1") == 2
     assert storage.activity.recent()[0]["action"] == "delete"
 
     # A second pass must not try again on files that are already gone.
-    stats, _ = applying.apply(marked_for_deletion, delete_rules, confirmed=True)
+    stats, _ = applying.apply(marked_for_deletion, delete_rules)
     assert stats.deleted == 0
 
 
 def test_dry_run_writes_nothing(marked_for_deletion, delete_rules, library_root):
     stats, planned = applying.apply(
-        marked_for_deletion, delete_rules, dry_run=True, confirmed=True
-    )
+        marked_for_deletion, delete_rules, dry_run=True)
     assert stats.by_action["delete"] == 2
     assert len(planned) == 2
     assert (library_root / "a.jpg").exists()
     assert not marked_for_deletion.settings.output.trash_folder.exists()
 
 
-def test_dry_run_reports_what_would_be_blocked(marked_for_deletion, delete_rules):
-    stats, planned = applying.apply(
-        marked_for_deletion, delete_rules, dry_run=True, confirmed=False
-    )
-    assert stats.skipped == 2
-    assert planned == []
+def test_dry_run_plans_the_deletions_rather_than_withholding_them(marked_for_deletion,
+                                                                  delete_rules):
+    """Nothing is held back from a preview: what it lists is what a real run does."""
+    stats, planned = applying.apply(marked_for_deletion, delete_rules, dry_run=True)
+    assert stats.skipped == 0
+    assert [p.action for p in planned] == ["delete", "delete"]
 
 
 # ------------------------------------------------------------------ registry
@@ -422,9 +428,7 @@ def test_a_new_action_needs_no_changes_elsewhere(populated):
 def test_verify_is_clean_after_apply(populated, ruleset):
     applying.apply(populated, ruleset)
     report = maintenance.verify(populated)
-    assert report.as_dict() == {
-        "copies_ok": 3, "copies_broken": 0, "copies_missing": 0, "sources_missing": 0
-    }
+    assert report.as_dict() == {"copies_ok": 3, "copies_missing": 0, "sources_missing": 0}
 
 
 def test_verify_notices_a_deleted_copy(populated, ruleset):

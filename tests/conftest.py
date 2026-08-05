@@ -50,9 +50,8 @@ def library_root(tmp_path: Path) -> Path:
 def env(tmp_path: Path, library_root: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     """Configuration pointing at the temporary library.
 
-    The folders go through the overlay rather than the environment, because the
-    environment is not a layer for those two keys — so a test configures them the
-    same way `app config set` and the Settings tab do.
+    The folders go through the overlay, the same way `app config set` and the
+    Settings tab write them.
     """
     values = {
         # Both layers that would otherwise reach outside tmp_path: the project's
@@ -64,6 +63,10 @@ def env(tmp_path: Path, library_root: Path, monkeypatch: pytest.MonkeyPatch) -> 
         "MEDIASORT_MODELS_DIR": str(tmp_path / "data" / "models"),
         "MEDIASORT_RULES": str(tmp_path / "data" / "rules.json"),
         "MEDIASORT_LOG_LEVEL": "CRITICAL",
+        # The duplicate finder has its own folders; pointing it at the same
+        # library is the case most likely to expose the two indexes bleeding
+        # into each other, so it is the default here.
+        "MEDIASORT_DUPES_FOLDERS": str(library_root),
         "MEDIASORT_WORKERS_SCAN": "2",
         "MEDIASORT_WORKERS_ANALYZE": "2",
     }

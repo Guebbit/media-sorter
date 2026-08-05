@@ -21,6 +21,8 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
+from app.errors import MediaSortError
+
 log = logging.getLogger(__name__)
 
 HASH_CHUNK = 1 << 20
@@ -88,6 +90,30 @@ def remove(path: str | Path) -> bool:
     if not exists(target):
         return False
     target.unlink()
+    return True
+
+
+def trash(path: str | Path) -> bool:
+    """Send a file to the desktop trash. False when there was nothing there.
+
+    Distinct from `remove`, which unlinks: this one is recoverable from the
+    file manager, which is the only reason a delete button is offered at all.
+    `send2trash` rather than an XDG implementation here — the `.trashinfo`
+    sidecar, per-filesystem trash directories and name collisions are exactly
+    what that library exists to get right, and a half-done trash is a delete.
+    """
+    target = Path(path)
+    if not exists(target):
+        return False
+    try:
+        from send2trash import send2trash
+    except ImportError as exc:  # optional: only the delete path needs it
+        raise MediaSortError(
+            "deleting to the desktop trash needs send2trash "
+            "(pip install send2trash) — until then, discard moves files into "
+            "the duplicates folder instead"
+        ) from exc
+    send2trash(os.fspath(target))
     return True
 
 

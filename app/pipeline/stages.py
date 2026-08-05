@@ -12,22 +12,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Callable
 
-from ..config import AnalyzeSettings, DetectSettings, WorkerSettings
+from ..config import DetectSettings, WorkerSettings
 from ..domain.adjudication import Adjudication, adjudicated, uncertain_classes
 from ..domain.decision import decide
-from ..domain.detection import VIDEO_CLASS, VIDEO_MODEL, Detection, is_video
-from ..domain.rules import (ClassBand, DEFAULT_CONFIDENCE, DEFAULT_OLLAMA_REVIEW,
-                            DEFAULT_REVIEW_CONFIDENCE, RuleSet)
+from ..domain.detection import VIDEO_CLASS, VIDEO_MODEL, Detection
+from ..domain.rules import RuleSet
 from ..errors import EngineError
 from ..storage import ImageRow, Stage, Storage
+from ..video import is_video
 from .ports import AdjudicatorEngine, DetectorEngine, VisionEngine
 from .stopper import Stopper
 
 log = logging.getLogger(__name__)
-
-#: What a class with no band at all gets — one no rule mentions, but whose
-#: detections still landed in storage.
-_DEFAULT_BAND = ClassBand(DEFAULT_CONFIDENCE, DEFAULT_REVIEW_CONFIDENCE, DEFAULT_OLLAMA_REVIEW)
 
 #: stage name, how many more are done, how many are left
 ProgressFn = Callable[[str, int, int], None]
@@ -79,11 +75,16 @@ def run_detect_stage(storage: Storage, settings: DetectSettings, ruleset: RuleSe
     detector, decide each one against `ruleset`, and persist the result —
     until the queue is empty, `limit` is spent, or `stopper` says to stop.
 
-    A video never reaches the detector — there is nothing here that decodes
-    one — so it is picked out of the batch by extension and given a synthetic
-    `video` detection instead, and `engine_factory()` is only ever called for a
-    batch that actually has a real image in it, lazily, so a library (or a
-    single batch) with no photos at all never pays to load YOLO.
+    A video takes the other of the two routes through the detector: frames
+    sampled across it, merged into one set of boxes (`DetectorEngine.detect_video`),
+    plus the `video` pseudo-class appended to whatever they found. That last
+    part is what makes a `{"class": "video"}` rule a fallback — real classes
+    match first if a rule above it wants them, and every video that YOLO saw
+    nothing in still lands somewhere deliberate rather than in the catch-all.
+
+    `engine_factory()` is called lazily, on the first batch that has something
+    to look at: with `DETECT_VIDEO_FRAMES=0` a library of videos never pays to
+    load YOLO at all, because nothing in it will be decoded.
     """
     stats = StageStats()
     images = storage.images
@@ -91,15 +92,43 @@ def run_detect_stage(storage: Storage, settings: DetectSettings, ruleset: RuleSe
     engine: DetectorEngine | None = None
     remaining_budget = limit
 
+    def _detector() -> DetectorEngine:
+        """The loaded model, built on first use and reused for every later
+        batch — loading weights is seconds and hundreds of MB of GPU memory."""
+        nonlocal engine
+        if engine is None:
+            engine = engine_factory()
+        return engine
+
     def _finish(row: ImageRow, detections: list[Detection], model: str,
                 skip_analyze: bool = False) -> None:
         """Score `row` against `ruleset`, persist the decision, and fold it
-        into `stats` — the one place both the video shortcut and the real
-        detector path land."""
+        into `stats` — the one place both the video route and the photo route
+        land."""
         decision = decide(detections, ruleset)
         storage.results.finish_detect(row.id, detections, decision, model, skip_analyze)
         stats.processed += 1
         stats.bump(decision.category)
+
+    def _look_inside(row: ImageRow) -> list[Detection] | None:
+        """What the detector found in one video, or None if it could not look —
+        because the settings said not to, or because no frame was readable.
+
+        A video that cannot be decoded is not failed the way an unreadable
+        photo is: its extension is still true, so it is sorted on that alone
+        rather than parked in the error state with nothing recorded.
+        """
+        if not settings.samples_video:
+            return None
+        # Outside the `try` on purpose: weights that will not load are fatal
+        # here exactly as they are for photos, rather than a run that quietly
+        # sorts every video by extension and never says why.
+        detector = _detector()
+        try:
+            return detector.detect_video(row.path)
+        except Exception as exc:  # noqa: BLE001 - one bad video must not kill the stage
+            log.error("video detection failed on %s: %s", row.path, exc)
+            return None
 
     try:
         while not stopper.stopped:
@@ -117,22 +146,30 @@ def run_detect_stage(storage: Storage, settings: DetectSettings, ruleset: RuleSe
                 (video_rows if is_video(row.path) else image_rows).append(row)
 
             for row in video_rows:
-                # No vision model in this pipeline can look at a video either,
-                # so the semantic pass has nothing to do here — skip it now
-                # rather than leave it pending on the strength of an action
-                # that only turns out to be `ignore` for some rules.
-                _finish(row, [Detection(VIDEO_CLASS, 1.0, 0, 0, 0, 0)], VIDEO_MODEL,
-                        skip_analyze=True)
+                found = _look_inside(row)
+                # The pseudo-class goes on the list either way: it is the one
+                # thing about the file that is certainly true, and a rule that
+                # matches it is the fallback under whatever the frames showed.
+                _finish(
+                    row,
+                    [*(found or []), Detection(VIDEO_CLASS, 1.0, 0, 0, 0, 0)],
+                    _detector().model_name if found is not None else VIDEO_MODEL,
+                    # Nothing looked inside, so the semantic pass has nothing to
+                    # describe: settle it now rather than leave it pending. When
+                    # frames *were* read, Ollama gets one of them like any photo.
+                    skip_analyze=found is None,
+                )
 
             if image_rows:
-                if engine is None:
-                    engine = engine_factory()
+                # Built before the `try`, so weights that will not load stop
+                # the run rather than failing every row batch after batch.
+                detector = _detector()
                 by_path = {row.path: row for row in image_rows}
                 try:
-                    # The one call into YOLO for this batch — `engine` is a
+                    # The one call into YOLO for this batch — `detector` is a
                     # `DetectorEngine` (in practice a `detecting.Detector`), so
                     # nothing here knows it is ultralytics on the other end.
-                    results = engine.detect_batch(list(by_path))
+                    results = detector.detect_batch(list(by_path))
                 except Exception as exc:  # noqa: BLE001 - a bad batch must not kill the run
                     log.error("detection batch failed: %s", exc)
                     for row in image_rows:
@@ -146,7 +183,7 @@ def run_detect_stage(storage: Storage, settings: DetectSettings, ruleset: RuleSe
                         images.fail(row.id, Stage.DETECT, "unreadable image")
                         stats.errors += 1
                         continue
-                    _finish(row, detections, engine.model_name)
+                    _finish(row, detections, detector.model_name)
 
             images.sync_adjudication_queue()
             images.skip_analysis_for_ignored()
@@ -244,9 +281,9 @@ def run_adjudicate_stage(storage: Storage, ruleset: RuleSet,
     return stats
 
 
-def run_analyze_stage(storage: Storage, settings: AnalyzeSettings, ruleset: RuleSet,
-                      workers: WorkerSettings, engine_factory: Callable[[], VisionEngine],
-                      stopper: Stopper, on_progress: ProgressFn | None = None,
+def run_analyze_stage(storage: Storage, ruleset: RuleSet, workers: WorkerSettings,
+                      engine_factory: Callable[[], VisionEngine], stopper: Stopper,
+                      on_progress: ProgressFn | None = None,
                       limit: int | None = None, wait_for_detect: bool = False) -> StageStats:
     """`wait_for_detect` keeps the stage alive while anything upstream still feeds it.
 
@@ -310,6 +347,6 @@ def _detection_hint(storage: Storage, image_id: int, ruleset: RuleSet) -> str | 
     hint = ", ".join(
         f"{d['class']} ({d['confidence']:.0%})"
         for d in storage.detections.for_image(image_id)
-        if d["confidence"] >= bands.get(d["class"], _DEFAULT_BAND).confidence
+        if d["confidence"] >= bands.for_class(d["class"]).confidence
     )
     return hint or None

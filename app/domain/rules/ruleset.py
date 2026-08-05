@@ -12,11 +12,9 @@ from typing import Any, Iterable, Sequence
 
 from ...errors import RuleError
 from ..detection import VIDEO_CLASS
-from .conditions import (AllOf, Always, ClassBand, Condition, DEFAULT_CONFIDENCE,
+from .conditions import (AllOf, Always, ClassBand, ClassBands, Condition, DEFAULT_CONFIDENCE,
                          DEFAULT_OLLAMA_REVIEW, DEFAULT_REVIEW_CONFIDENCE, HasClass, InDoubt,
-                         MatchContext, parse_condition)
-
-RULES_VERSION = 1
+                         MatchContext, merge_overrides, parse_condition, reject_unknown)
 
 #: The rule for photos the detector could not settle. Always present, always
 #: last, and not deletable: "what happens to the ones I am unsure about" is a
@@ -62,6 +60,7 @@ class Rule:
         """Parse one rule from the rules file's dict shape."""
         if not isinstance(node, dict):
             raise RuleError(f"a rule must be an object, got {type(node).__name__}")
+        reject_unknown(node, ("name", "when", "action", "folder", "enabled"), "a rule")
         name = node.get("name")
         if not isinstance(name, str) or not name.strip():
             raise RuleError(f"rule 'name' must be a non-empty string, got {name!r}")
@@ -92,10 +91,10 @@ def doubt_rule(action: str = DOUBT_DEFAULT_ACTION, folder: str = DOUBT_FOLDER) -
 def with_doubt_rule(rules: Sequence[Rule]) -> tuple[Rule, ...]:
     """The rules, with the doubt rule present exactly once and last.
 
-    Applied on every load, so a file that predates it — or one a person edited
-    it out of — comes back with it rather than silently losing the answer.
-    Its condition is forced too: `in_doubt` is the only one that means anything
-    in that slot, whatever the file says.
+    Applied on every load, so a file a person edited it out of comes back
+    with it rather than silently losing the answer. Its condition is forced
+    too: `in_doubt` is the only one that means anything in that slot, whatever
+    the file says.
     """
     ordinary = [r for r in rules if r.name != DOUBT_RULE_NAME]
     existing = next((r for r in rules if r.name == DOUBT_RULE_NAME), None)
@@ -165,54 +164,39 @@ class RuleSet:
         """Every rule's name, in priority order."""
         return [rule.name for rule in self.rules]
 
-    def class_bands(self) -> dict[str, ClassBand]:
+    def class_bands(self) -> ClassBands:
         """Every mentioned class's resolved confidence policy.
 
-        Resolved one *field* at a time, not one whole tuple at a time: the
-        first rule (in priority order) to set a given field for a class wins
-        that field, independently of the other two. A rule that mentions a
-        class without overriding anything (say, `cat` inside an `all_of` with
-        `dog`) must not shadow a stricter `min_confidence` some later rule
-        sets for that same class — if the whole tuple were claimed on first
-        sight, the earlier, uncustomised mention would silently win and the
-        later rule's override would never be seen. Anything no rule sets at
-        all falls back to the hardcoded default rather than a global setting.
+        Resolved one *field* at a time by `merge_overrides` — the same
+        resolution a single condition's children get, applied across whole
+        rules in priority order. Anything no rule sets at all falls back to
+        `DEFAULT_BAND` rather than to a global setting.
         """
-        confidences: dict[str, float] = {}
-        reviews: dict[str, float] = {}
-        ollama_reviews: dict[str, bool] = {}
-        classes: set[str] = set()
-        for rule in self.rules:
-            if rule.name == DOUBT_RULE_NAME:
-                continue
-            for cls, (confidence, review_confidence, ollama_review) in rule.condition.class_bands().items():
-                classes.add(cls)
-                if confidence is not None:
-                    confidences.setdefault(cls, confidence)
-                if review_confidence is not None:
-                    reviews.setdefault(cls, review_confidence)
-                if ollama_review is not None:
-                    ollama_reviews.setdefault(cls, ollama_review)
-        return {
-            cls: ClassBand(
-                confidence=confidences.get(cls, DEFAULT_CONFIDENCE),
-                review_confidence=reviews.get(cls, DEFAULT_REVIEW_CONFIDENCE),
-                ollama_review=ollama_reviews.get(cls, DEFAULT_OLLAMA_REVIEW),
-            )
-            for cls in classes
-        }
+        merged = merge_overrides(
+            rule.condition.class_bands()
+            for rule in self.rules if rule.name != DOUBT_RULE_NAME
+        )
+        return ClassBands(
+            (cls, ClassBand(
+                confidence=DEFAULT_CONFIDENCE if confidence is None else confidence,
+                review_confidence=(DEFAULT_REVIEW_CONFIDENCE if review_confidence is None
+                                   else review_confidence),
+                ollama_review=DEFAULT_OLLAMA_REVIEW if ollama_review is None else ollama_review,
+            ))
+            for cls, (confidence, review_confidence, ollama_review) in merged.items()
+        )
 
     def needs_adjudication(self) -> bool:
         """Whether any class in this ruleset is banded for a second opinion at
-        all. The replacement for the old global `ADJUDICATE_ENABLED`: instead
-        of one settings flag, it is true the moment any rule opts a class in."""
+        all. Not a settings flag: it is true the moment any rule opts a class
+        in, so the answer follows the rules rather than shadowing them."""
         return any(band.ollama_review for band in self.class_bands().values())
 
     # ---------------------------------------------------------- serialisation
 
     def to_json(self) -> dict[str, Any]:
         """This ruleset as the dict shape the rules file stores."""
-        return {"version": RULES_VERSION, "rules": [rule.to_json() for rule in self.rules]}
+        return {"rules": [rule.to_json() for rule in self.rules]}
 
     @classmethod
     def from_json(cls, data: Any) -> "RuleSet":
@@ -220,6 +204,7 @@ class RuleSet:
         make sure the doubt rule is present exactly once and last."""
         if not isinstance(data, dict):
             raise RuleError(f"the rules file must contain an object, got {type(data).__name__}")
+        reject_unknown(data, ("rules",), "the rules file")
         raw = data.get("rules")
         if not isinstance(raw, list):
             raise RuleError("the rules file must have a 'rules' list")
@@ -281,10 +266,14 @@ class RuleSet:
         Whatever is missing is one click away in the editor.
 
         `video` is pulled out of that combinatorial treatment rather than
-        folded in with the rest: a video paired with a cat in the same photo
-        means nothing, so it never belongs in an `all_of` combination, and it
-        gets its own action (`move`, into `video/`) rather than the ordinary
-        `copy`.
+        folded in with the rest, and placed *below* every real class: it is
+        true of a file by extension, so a rule matching it would win every
+        video the moment it came first, and a video of a cat would never reach
+        the cat rule. Last, it is the fallback it should be — everything the
+        detector found in the frames sorts by what it found, and whatever it
+        found nothing in still lands in `video/` instead of the catch-all. It
+        gets `move` rather than the ordinary `copy` for the same reason it
+        always did: a library keeps one copy of a two-gigabyte clip.
         """
         requested = {c.lower() for c in classes if c.strip()}
         wants_video = VIDEO_CLASS in requested

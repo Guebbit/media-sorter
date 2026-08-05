@@ -122,7 +122,7 @@ def analyze(ctx: AppContext, ruleset: RuleSet, stopper: Stopper,
     `wait_for_detect`)."""
     classes = _real_classes(ruleset)
     return run_analyze_stage(
-        ctx.storage, ctx.settings.analyze, ruleset, ctx.settings.workers,
+        ctx.storage, ruleset, ctx.settings.workers,
         vision_factory(ctx, classes, startup_wait), stopper, on_progress, limit=limit,
         wait_for_detect=wait_for_detect,
     )

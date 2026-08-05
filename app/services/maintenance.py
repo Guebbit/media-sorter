@@ -7,7 +7,7 @@ in `actions`, and each sits behind two locks of its own.
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 from .. import filesystem
 from ..actions.executor import verify_links
@@ -21,16 +21,12 @@ class VerifyReport:
     still agree with what the index believes."""
 
     copies_ok: int = 0
-    copies_broken: int = 0
     copies_missing: int = 0
     sources_missing: int = 0
 
     def as_dict(self) -> dict[str, int]:
         """Plain-dict form, for rendering or serializing."""
-        return {
-            "copies_ok": self.copies_ok, "copies_broken": self.copies_broken,
-            "copies_missing": self.copies_missing, "sources_missing": self.sources_missing,
-        }
+        return asdict(self)
 
 
 @dataclass(slots=True)
@@ -45,7 +41,7 @@ class CleanReport:
 
 def verify(ctx: AppContext) -> VerifyReport:
     """Check that indexed originals and generated links still exist."""
-    report = VerifyReport(**verify_links(ctx.action_context, ctx.storage.links))
+    report = VerifyReport(**verify_links(ctx.storage.links))
     for row in ctx.storage.images.iter_live_paths():
         if not os.path.exists(row["path"]):
             report.sources_missing += 1

@@ -8,18 +8,22 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Iterable, Sequence
 
 from ...errors import RuleError
 from ..detection import Detection
 
-#: What a class condition gets when it does not set its own band. Replaces the
-#: old global `DETECT_CONFIDENCE`/`REVIEW_CONFIDENCE`/`ADJUDICATE_ENABLED`
-#: settings — there is no machine-wide right answer for these any more than
+#: What a class condition gets when it does not set its own band. Not settable
+#: globally: there is no machine-wide right answer for these any more than
 #: there is for the class itself, so the fallback lives in code, not config.
 DEFAULT_CONFIDENCE = 0.65
 DEFAULT_REVIEW_CONFIDENCE = 0.35
 DEFAULT_OLLAMA_REVIEW = True
+
+#: Every field a `class` condition may carry. The one list, checked on parse —
+#: see `reject_unknown`.
+CLASS_FIELDS = ("class", "min_count", "min_confidence", "min_review_confidence",
+                "ollama_review")
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +35,91 @@ class ClassBand:
     confidence: float
     review_confidence: float
     ollama_review: bool
+
+
+#: What a class no rule mentions gets — one whose rule was deleted since the
+#: detection was made, but whose row still carries it. Defined once here rather
+#: than reassembled from the three `DEFAULT_*` constants wherever a lookup can
+#: miss, so "the fallback band" is a single value with a single name.
+DEFAULT_BAND = ClassBand(DEFAULT_CONFIDENCE, DEFAULT_REVIEW_CONFIDENCE, DEFAULT_OLLAMA_REVIEW)
+
+#: What one condition asked for, per class, before defaults: `None` in a slot
+#: means "did not say". `ClassBand` is the same three fields once resolved.
+BandOverride = tuple[float | None, float | None, bool | None]
+
+
+def merge_overrides(sources: Iterable[dict[str, BandOverride]]) -> dict[str, BandOverride]:
+    """Overrides from several sources, merged one *field* at a time.
+
+    The first source (in the order given, which is priority order) to set a
+    given field for a class wins that field, independently of the other two. A
+    source that mentions a class without overriding anything must not shadow a
+    later one's override of that same field — claiming the whole tuple on first
+    sight would let an earlier, uncustomised mention silently win.
+
+    Shared by `_Composite.class_bands` (merging sibling conditions) and
+    `RuleSet.class_bands` (merging whole rules): the resolution rule is the
+    same at both levels, so it is written once.
+    """
+    confidences: dict[str, float] = {}
+    reviews: dict[str, float] = {}
+    ollama_reviews: dict[str, bool] = {}
+    # A dict rather than a set, so the merged result keeps the order the classes
+    # were first mentioned in instead of an arbitrary one.
+    classes: dict[str, None] = {}
+    for source in sources:
+        for cls, (confidence, review_confidence, ollama_review) in source.items():
+            classes.setdefault(cls)
+            if confidence is not None:
+                confidences.setdefault(cls, confidence)
+            if review_confidence is not None:
+                reviews.setdefault(cls, review_confidence)
+            if ollama_review is not None:
+                ollama_reviews.setdefault(cls, ollama_review)
+    return {
+        cls: (confidences.get(cls), reviews.get(cls), ollama_reviews.get(cls))
+        for cls in classes
+    }
+
+
+class ClassBands(dict[str, ClassBand]):
+    """Every mentioned class's resolved band, plus the questions callers ask of
+    the set as a whole.
+
+    A plain mapping would force every caller to repeat the same
+    `bands.get(cls, DEFAULT_BAND)` fallback and the same "which classes are
+    borderline" arithmetic — which is exactly what the decision engine, the
+    adjudicator and the analyze stage each used to carry a private copy of.
+    """
+
+    def for_class(self, cls: str) -> ClassBand:
+        """`cls`'s band, or `DEFAULT_BAND` for a class no rule mentions."""
+        return self.get(cls, DEFAULT_BAND)
+
+    def unsettled(self, detections: Iterable[Detection], *,
+                  escalatable_only: bool = False) -> set[str]:
+        """Classes seen in the review band and never above it.
+
+        These are the classes the detector could not settle: something scored
+        high enough to be worth considering but too low to act on, and nothing
+        of that class scored above the line. A class that also has a confident
+        box is not in doubt at all, whatever its weaker boxes say.
+
+        `escalatable_only` restricts the answer to classes whose band actually
+        asks for a second opinion — the difference between "flag this for a
+        person" (`decision.decide`, which ignores the toggle) and "ask Ollama
+        about this" (`adjudication.uncertain_classes`, which honours it).
+        """
+        confident: set[str] = set()
+        borderline: set[str] = set()
+        for detection in detections:
+            band = self.for_class(detection.cls)
+            if detection.confidence >= band.confidence:
+                confident.add(detection.cls)
+            elif (detection.confidence >= band.review_confidence
+                  and (band.ollama_review or not escalatable_only)):
+                borderline.add(detection.cls)
+        return borderline - confident
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +166,7 @@ class Condition(ABC):
         looks for."""
         return set()
 
-    def class_bands(self) -> dict[str, tuple[float | None, float | None, bool | None]]:
+    def class_bands(self) -> dict[str, BandOverride]:
         """Which classes this condition sets a confidence policy for, and what
         it asked for — `None` in a slot means "use the default." Only `HasClass`
         actually answers; everything else unions or delegates to its children,
@@ -125,7 +214,7 @@ class HasClass(Condition):
     def classes(self) -> set[str]:
         return {self.cls}
 
-    def class_bands(self) -> dict[str, tuple[float | None, float | None, bool | None]]:
+    def class_bands(self) -> dict[str, BandOverride]:
         return {self.cls: (self.min_confidence, self.min_review_confidence, self.ollama_review)}
 
     def describe(self) -> str:
@@ -180,31 +269,10 @@ class _Composite(Condition):
     def classes(self) -> set[str]:
         return set().union(*(child.classes() for child in self.children))
 
-    def class_bands(self) -> dict[str, tuple[float | None, float | None, bool | None]]:
-        """Every child's bands, merged left to right, one field at a time.
-
-        A child that mentions a class without overriding a field must not
-        shadow a later child's override of that same field — see
-        `RuleSet.class_bands()`, which resolves the same way across whole
-        rules for the identical reason.
-        """
-        confidences: dict[str, float] = {}
-        reviews: dict[str, float] = {}
-        ollama_reviews: dict[str, bool] = {}
-        classes: set[str] = set()
-        for child in self.children:
-            for cls, (confidence, review_confidence, ollama_review) in child.class_bands().items():
-                classes.add(cls)
-                if confidence is not None:
-                    confidences.setdefault(cls, confidence)
-                if review_confidence is not None:
-                    reviews.setdefault(cls, review_confidence)
-                if ollama_review is not None:
-                    ollama_reviews.setdefault(cls, ollama_review)
-        return {
-            cls: (confidences.get(cls), reviews.get(cls), ollama_reviews.get(cls))
-            for cls in classes
-        }
+    def class_bands(self) -> dict[str, BandOverride]:
+        """Every child's bands, merged left to right, one field at a time —
+        see `merge_overrides`, which `RuleSet.class_bands()` shares."""
+        return merge_overrides(child.class_bands() for child in self.children)
 
     def describe(self) -> str:
         joiner = {"all_of": " and ", "any_of": " or ", "none_of": " nor "}[self.key]
@@ -260,7 +328,7 @@ class Not(Condition):
     def classes(self) -> set[str]:
         return self.child.classes()
 
-    def class_bands(self) -> dict[str, tuple[float | None, float | None, bool | None]]:
+    def class_bands(self) -> dict[str, BandOverride]:
         return self.child.class_bands()
 
     def describe(self) -> str:
@@ -314,8 +382,25 @@ def register_condition(key: str, parser: Callable[[dict[str, Any]], Condition]) 
     _PARSERS[key] = parser
 
 
+def reject_unknown(node: dict[str, Any], known: Iterable[str], what: str) -> None:
+    """Raise unless every key of `node` is one `what` defines.
+
+    There is exactly one current shape for every node in the rules file and no
+    reader for any older one, so a key this build does not recognise is either
+    a typo or a leftover from a shape that no longer exists. Both are worth
+    saying out loud: accepting them quietly is how a rule ends up doing
+    something other than what its file appears to say.
+    """
+    unknown = sorted(set(node) - set(known))
+    if unknown:
+        raise RuleError(
+            f"{what} has unknown field(s) {unknown}; expected only {sorted(known)}"
+        )
+
+
 def _parse_class(node: dict[str, Any]) -> Condition:
     """A `{"class": ...}` node (or its string shorthand) into a `HasClass`."""
+    reject_unknown(node, CLASS_FIELDS, "a 'class' condition")
     name = node.get("class")
     if not isinstance(name, str) or not name.strip():
         raise RuleError(f"'class' must be a non-empty string, got {name!r}")
@@ -348,7 +433,14 @@ def _parse_class(node: dict[str, Any]) -> Condition:
 
 def _parse_any_detection(node: dict[str, Any]) -> Condition:
     """A `{"any_detection": true, ...}` node into an `AnyDetection`, reusing
-    `_parse_class`'s `min_count`/`min_confidence` validation."""
+    `_parse_class`'s `min_count`/`min_confidence` validation.
+
+    Checked against its own narrower field list first: `AnyDetection` has no
+    per-class band, so the two review fields `_parse_class` would accept here
+    would be parsed and then dropped on the floor.
+    """
+    reject_unknown(node, ("any_detection", "min_count", "min_confidence"),
+                   "an 'any_detection' condition")
     base = _parse_class({"class": "_", **{k: v for k, v in node.items() if k != "any_detection"}})
     assert isinstance(base, HasClass)
     return AnyDetection(base.min_count, base.min_confidence)
@@ -359,6 +451,7 @@ def _composite_parser(factory: Callable[[Sequence[Condition]], Condition], key: 
     recursively parses each child before handing them to `factory`."""
     def parse(node: dict[str, Any]) -> Condition:
         """Build the composite condition `factory` produces from `node`."""
+        reject_unknown(node, (key,), f"a {key!r} condition")
         children = node.get(key)
         if not isinstance(children, list):
             raise RuleError(f"{key!r} must be a list of conditions")
@@ -372,9 +465,19 @@ register_condition("any_detection", _parse_any_detection)
 register_condition("all_of", _composite_parser(AllOf, "all_of"))
 register_condition("any_of", _composite_parser(AnyOf, "any_of"))
 register_condition("none_of", _composite_parser(NoneOf, "none_of"))
-register_condition("not", lambda node: Not(parse_condition(node["not"])))
-register_condition("always", lambda node: Always())
-register_condition("in_doubt", lambda node: InDoubt())
+def _parse_unary(key: str, factory: Callable[[dict[str, Any]], Condition]):
+    """A parser for a node whose only field is `key`, checked before building."""
+    def parse(node: dict[str, Any]) -> Condition:
+        """Reject anything alongside `key`, then build the condition."""
+        reject_unknown(node, (key,), f"a {key!r} condition")
+        return factory(node)
+
+    return parse
+
+
+register_condition("not", _parse_unary("not", lambda node: Not(parse_condition(node["not"]))))
+register_condition("always", _parse_unary("always", lambda node: Always()))
+register_condition("in_doubt", _parse_unary("in_doubt", lambda node: InDoubt()))
 
 
 def parse_condition(node: Any) -> Condition:

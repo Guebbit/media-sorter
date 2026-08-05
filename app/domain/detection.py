@@ -8,7 +8,7 @@ rules — no cycle, no untyped tuples.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from typing import Iterable, Sequence
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,21 +32,49 @@ class Detection:
         )
 
 
-#: The pseudo-class a video file gets instead of a YOLO detection. Nothing
-#: decodes a video's frames — there is no model for that here — so a rule
-#: matches a video by name (`{"class": "video"}`) the same way it matches a
-#: real object, and the detector never sees the file at all.
+#: The pseudo-class every video file gets, on top of whatever the detector
+#: found in its frames. No model looks for it — it is true of the file by its
+#: extension (`video.is_video`) — so a rule matching `{"class": "video"}`
+#: catches a video whatever is in it, which makes it the fallback *below* the
+#: real classes rather than a verdict of its own. It is also all a video gets
+#: when frame sampling is off, or when no frame of it could be read.
 VIDEO_CLASS = "video"
 
-#: What `finish_detect` records as the "model" for a video's synthetic
-#: detection, in place of a YOLO weights filename.
+#: What `finish_detect` records as the "model" for a video nothing looked
+#: inside of, in place of a YOLO weights filename.
 VIDEO_MODEL = "file-extension"
 
-VIDEO_EXTENSIONS = frozenset({
-    ".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp", ".3g2", ".mpg", ".mpeg", ".wmv",
-})
+
+def merge_frames(per_frame: Iterable[Sequence[Detection]]) -> list[Detection]:
+    """Several frames' detections collapsed into one verdict for the file.
+
+    The index stores detections per *file*, and a video is one row, so the
+    frames have to agree on a single answer. Per class, the frame that saw the
+    most of it wins, ties going to the more confident one — the busiest frame,
+    not the average. Two reasons it is a maximum rather than a mean:
+
+    * a cat that walks into shot halfway through is still a cat in the video,
+      and averaging over the frames it is absent from would hide it;
+    * counts have to survive, because `min_count` conditions read them. Taking
+      the best box per class instead of the best *frame* per class would cap
+      every video at one of everything, and "two cats" would never match.
+
+    Boxes are the winning frame's own, in that frame's coordinates. Ordered by
+    descending confidence, so a stored list reads as what the video is mostly
+    of. An empty input gives an empty list — a video nothing was found in.
+    """
+    best: dict[str, list[Detection]] = {}
+    for detections in per_frame:
+        by_class: dict[str, list[Detection]] = {}
+        for detection in detections:
+            by_class.setdefault(detection.cls, []).append(detection)
+        for cls, boxes in by_class.items():
+            if cls not in best or _strength(boxes) > _strength(best[cls]):
+                best[cls] = boxes
+    return [box for boxes in sorted(best.values(), key=_strength, reverse=True) for box in boxes]
 
 
-def is_video(path: str | Path) -> bool:
-    """Whether `path` names a video rather than a photo, by extension alone."""
-    return Path(path).suffix.lower() in VIDEO_EXTENSIONS
+def _strength(boxes: Sequence[Detection]) -> tuple[int, float]:
+    """How good a case one frame makes for one class: how many it saw, then
+    how sure it was of the best of them."""
+    return len(boxes), max(box.confidence for box in boxes)

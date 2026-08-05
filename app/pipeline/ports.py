@@ -22,6 +22,16 @@ class DetectorEngine(Protocol):
         """A None value means that image could not be read."""
         ...
 
+    def detect_video(self, path: str) -> list[Detection] | None:
+        """Boxes for one video, already merged across the frames the engine
+        chose to look at — the pipeline stores one row per file, not per frame.
+
+        None means no frame could be read. Deliberately not the same as an
+        empty list, which means the engine looked and found nothing: only the
+        first sends the caller back to matching the file by extension alone.
+        """
+        ...
+
     def close(self) -> None:
         """Release whatever `detect_batch` was holding (a model, a thread pool)."""
         ...

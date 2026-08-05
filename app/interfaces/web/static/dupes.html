@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mediasort — duplicates</title>
+<style>
+  /* Its own stylesheet rather than a shared one: this page has no rules editor,
+     no pipeline and no settings form, and carrying their styling here would
+     mean every change to the sorting UI risked moving something on this one. */
+  :root {
+    --bg:#12141a; --panel:#1a1d26; --line:#2b3040; --text:#e6e8ef; --dim:#8b93a7;
+    --accent:#5b9dff; --warn:#ffb454; --danger:#ff6b6b; --ok:#4ade80; --radius:10px;
+    --on-accent:#08101f;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f9; --panel:#fff; --line:#e2e5ec; --text:#1b1e26; --dim:#6b7280;
+            --accent:#1d63d1; --warn:#8a5300; --danger:#c02626; --ok:#15803d;
+            --on-accent:#fff; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.55 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+  /* Sticky, so the shortcut it carries is still there ten groups down. */
+  header { padding:18px 24px; border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+           position:sticky; top:0; z-index:5; background:var(--bg); }
+  header h1 { font-size:19px; margin:0; letter-spacing:-.01em; }
+  header .sub { color:var(--dim); font-size:13px; }
+  .spacer { flex:1; }
+  /* The link back is a link, not a tab: the two pages are separate documents. */
+  nav a { color:var(--dim); text-decoration:none; font-size:13px; padding:6px 12px;
+          border:1px solid var(--line); border-radius:8px; }
+  nav a:hover { border-color:var(--accent); color:var(--text); }
+  nav a.here { color:var(--text); border-color:var(--accent); font-weight:600; }
+  main { padding:20px 24px 60px; max-width:1180px; margin:0 auto; }
+  .card { background:var(--panel); border:1px solid var(--line);
+          border-radius:var(--radius); padding:16px; margin-bottom:16px; }
+  .card h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+             color:var(--dim); margin:0 0 12px; font-weight:600; }
+  button { font:inherit; padding:7px 13px; border-radius:8px; border:1px solid var(--line);
+           background:var(--panel); color:var(--text); cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--accent); border-color:var(--accent);
+                   color:var(--on-accent); font-weight:600; }
+  button.small { padding:3px 8px; font-size:12px; }
+  /* Destructive, and it looks it — the only red buttons on the page. */
+  button.danger { border-color:var(--danger); color:var(--danger); font-weight:600; }
+  button.danger:hover:not(:disabled) { border-color:var(--danger);
+                                       background:color-mix(in srgb, var(--danger) 14%, transparent); }
+  input { font:inherit; padding:6px 9px; border-radius:8px;
+          border:1px solid var(--line); background:var(--bg); color:var(--text); }
+  input[type=number] { width:76px; }
+  input.folder { min-width:340px; }
+  .bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .muted { color:var(--dim); font-size:13px; }
+  .status { font-size:13px; color:var(--dim); }
+  .status.err { color:var(--danger); }
+  .status.ok { color:var(--ok); }
+  .hidden { display:none; }
+  .warn-box { border:1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+              background:color-mix(in srgb, var(--warn) 12%, var(--panel));
+              color:var(--warn); border-radius:8px;
+              padding:10px 12px; font-size:13px; margin-bottom:14px; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:12.5px; }
+
+  /* A group of look-alike photos, each a thumbnail with a keep/discard pair. */
+  .dupe-group { margin-bottom:16px; }
+  .dupe-images { display:flex; gap:14px; flex-wrap:wrap; }
+  .dupe-item { display:flex; flex-direction:column; gap:6px; align-items:center;
+               width:280px; border:1px solid var(--line); border-radius:8px; padding:8px; }
+  .dupe-item[data-mark="keep"] { border-color:var(--ok); }
+  .dupe-item[data-mark="discard"] { border-color:var(--danger); opacity:.62; }
+  .dupe-mark { display:flex; gap:5px; }
+  .dupe-mark button.on { border-color:currentColor; font-weight:600; }
+  .dupe-item[data-mark="keep"] .dupe-mark button.on { color:var(--ok); }
+  .dupe-item[data-mark="discard"] .dupe-mark button.on { color:var(--danger); }
+  .dupe-score { font-weight:600; }
+  /* `contain`, so a portrait or panorama letterboxes instead of losing its edges. */
+  .dupe-item img { width:100%; height:240px; object-fit:contain; border-radius:6px;
+                   background:var(--bg); }
+  .dupe-meta { text-align:center; font-size:12.5px; word-break:break-word; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Duplicates</h1>
+  <span class="sub">photos that look alike, whatever their bytes say</span>
+  <!-- The same action as the card below, within reach from anywhere down the
+       list of groups — reviewing is scrolling, and the button that ends the
+       review should not be a scroll back up. -->
+  <button id="btn-discard-top" class="danger small" disabled>Delete duplicates</button>
+  <span class="spacer"></span>
+  <nav>
+    <a href="/">Sort</a>
+    <a href="/duplicates" class="here">Duplicates</a>
+  </nav>
+</header>
+
+<main>
+  <div id="no-folder" class="warn-box hidden"></div>
+
+  <div class="card">
+    <h2>Folder to check</h2>
+    <p class="muted" style="margin-top:0">
+      Its own folder, unrelated to the folders you sort. Checking here does not add
+      anything to the sorting library and never runs the detector.
+    </p>
+    <div id="folders"></div>
+    <div class="bar" style="margin-top:10px">
+      <button id="btn-add-folder" class="small">add folder</button>
+      <button id="btn-save-folders" class="primary">Save</button>
+      <label class="muted" title="Off by default, so a check leaves nothing behind.">
+        <input type="checkbox" id="save-index"> remember this scan
+      </label>
+      <span class="status" id="folder-status"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Check</h2>
+    <div class="bar">
+      <button class="primary" id="btn-scan">Scan folder</button>
+      <button id="btn-find">Find duplicates</button>
+      <label class="muted">max distance
+        <input type="number" id="distance" value="10" min="0" max="64">
+      </label>
+      <span class="muted" id="distance-note"></span>
+      <span class="status" id="status"></span>
+    </div>
+    <p class="muted" style="margin-bottom:0">
+      Scanning reads and hashes every image in the folder; finding groups them.
+      Distance counts how many of the 64 hash bits differ, so a smaller number
+      means a tighter group — and every photo in a group is within it of the
+      copy it is compared against, never further.
+    </p>
+  </div>
+
+  <!-- The one destructive control on this page, kept apart from the review
+       buttons and stating where the files go before it is pressed. The tick
+       box next to it is what chooses between the two destinations. -->
+  <div class="card" id="discard-card">
+    <h2>Delete duplicates</h2>
+    <div class="bar">
+      <button id="btn-discard" class="danger">Delete duplicates</button>
+      <!-- On by default — the duplicates folder is a stop most people empty by
+           hand anyway. Read per press and never stored, so the state you can
+           see on the button is the state that runs. -->
+      <label class="muted" title="Untick to move files into the duplicates folder instead.">
+        <input type="checkbox" id="direct-delete" checked> delete straight to the desktop trash
+      </label>
+      <span class="muted" id="discard-note"></span>
+      <span class="status" id="discard-status"></span>
+    </div>
+  </div>
+
+  <div id="groups"></div>
+</main>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const el = (tag, props = {}, kids = []) => {
+  const node = Object.assign(document.createElement(tag), props);
+  for (const k of [].concat(kids)) node.append(k);
+  return node;
+};
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const data = await res.json().catch(() => ({ error: res.statusText }));
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  return data;
+}
+const setStatus = (sel, text, kind = "") => {
+  const node = $(sel);
+  node.textContent = text;
+  node.className = "status " + kind;
+};
+const post = (path, body) => api(path, {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify(body),
+});
+
+let CONFIG = { folders: [], saved: false, indexed: 0, default_distance: 10, trash: "" };
+
+/* ---------------------------------------------------------------- folders */
+
+function renderFolders() {
+  const box = $("#folders");
+  box.replaceChildren();
+  const rows = CONFIG.folders.length ? CONFIG.folders : [""];
+  rows.forEach((value, index) => {
+    const row = el("div", { className: "bar", style: "margin-bottom:6px" });
+    const input = el("input", { className: "folder", value, placeholder: "/path/to/photos" });
+    input.oninput = () => { CONFIG.folders[index] = input.value; };
+    const remove = el("button", { className: "small", textContent: "remove" });
+    remove.onclick = () => {
+      CONFIG.folders.splice(index, 1);
+      renderFolders();
+    };
+    row.append(input, remove);
+    box.append(row);
+  });
+  CONFIG.folders = rows.slice();
+}
+
+$("#btn-add-folder").onclick = () => { CONFIG.folders.push(""); renderFolders(); };
+
+$("#btn-save-folders").onclick = async () => {
+  const folders = CONFIG.folders.map((f) => f.trim()).filter(Boolean);
+  if (!folders.length) {
+    setStatus("#folder-status", "name a folder first", "err");
+    return;
+  }
+  try {
+    await post("/api/settings", { values: {
+      DUPES_FOLDERS: folders,
+      DUPES_SAVE_INDEX: $("#save-index").checked,
+    } });
+    setStatus("#folder-status", "saved", "ok");
+    await loadConfig();
+  } catch (err) {
+    setStatus("#folder-status", err.message, "err");
+  }
+};
+
+async function loadConfig() {
+  CONFIG = await api("/api/dupes/config");
+  $("#save-index").checked = CONFIG.saved;
+  $("#distance").value = CONFIG.default_distance;
+  renderDistanceNote();
+  renderFolders();
+
+  // Two different nothings, and the fix differs: no folder chosen at all, or a
+  // folder chosen but never scanned. Saying "no duplicates found" for either
+  // would be a lie.
+  const warn = $("#no-folder");
+  const configured = CONFIG.folders.filter(Boolean).length;
+  warn.classList.toggle("hidden", configured > 0 && CONFIG.indexed > 0);
+  if (!configured) {
+    warn.innerHTML = "<b>No folder chosen yet.</b> Name one above and press Save.";
+  } else if (!CONFIG.indexed) {
+    warn.innerHTML = "<b>Nothing hashed yet.</b> Press <b>Scan folder</b> — "
+      + "finding duplicates reads hashes the scan computes.";
+  }
+  $("#btn-find").disabled = !CONFIG.indexed;
+  renderDiscardNote();
+}
+
+/* ------------------------------------------------------------- the scan */
+
+// The scan is a background job: the page starts it and polls, so a folder that
+// takes minutes to hash never holds a request open. `/api/job` rather than
+// `/api/stats` — the latter computes the whole sorting overview, which is a
+// different index and none of it is on screen here.
+async function waitForJob() {
+  for (;;) {
+    const { job } = await api("/api/job");
+    if (!job.busy) return job;
+    setStatus("#status", job.message || "working…");
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
+$("#btn-scan").onclick = async () => {
+  $("#btn-scan").disabled = true;
+  // Said before the first poll, so the button never sits there looking dead
+  // while a big folder is being walked.
+  setStatus("#status", "reading the folder…");
+  try {
+    const started = await post("/api/dupes/scan", {});
+    if (started.started === false) {
+      setStatus("#status", "something else is running — wait for it to finish", "err");
+      return;
+    }
+    const job = await waitForJob();
+    setStatus("#status", job.error || job.message, job.error ? "err" : "ok");
+    await loadConfig();
+  } catch (err) {
+    setStatus("#status", err.message, "err");
+  } finally {
+    $("#btn-scan").disabled = false;
+  }
+};
+
+/* --------------------------------------------------------------- groups */
+
+function formatBytes(n) {
+  if (!n) return "size unknown";
+  const units = ["B", "KB", "MB", "GB"];
+  let value = n, i = 0;
+  while (value >= 1024 && i < units.length - 1) { value /= 1024; i++; }
+  return `${value.toFixed(i && value < 10 ? 1 : 0)} ${units[i]}`;
+}
+
+// Marking records a decision and does nothing else — no photo is moved, copied
+// or deleted from this page. What a `discard` mark should eventually cause has
+// not been decided, so nothing here can act on one.
+const setMark = (imageIds, mark) =>
+  post("/api/duplicates/mark", { image_ids: imageIds, mark });
+
+function renderGroup(group, idx) {
+  const card = el("div", { className: "card dupe-group" });
+  card.append(el("h2", {
+    textContent: `Group ${idx + 1} — ${group.images.length} photos, `
+      + `${group.similarity}% alike at the loosest`,
+  }));
+  const row = el("div", { className: "dupe-images" });
+
+  for (const img of group.images) {
+    const item = el("div", { className: "dupe-item" });
+    item.dataset.mark = img.mark || "";
+
+    // Two buttons rather than a checkbox: "no decision yet" is a real third
+    // state, and clicking the mark you already have takes it back off.
+    const buttons = el("div", { className: "dupe-mark" });
+    for (const [value, label] of [["keep", "Keep"], ["discard", "Discard"]]) {
+      const button = el("button", { className: "small", textContent: label });
+      button.classList.toggle("on", img.mark === value);
+      button.onclick = async () => {
+        const next = item.dataset.mark === value ? null : value;
+        try {
+          await setMark([img.id], next);
+          item.dataset.mark = next || "";
+          buttons.querySelectorAll("button").forEach((b) =>
+            b.classList.toggle("on", b.textContent.toLowerCase() === next));
+          setStatus("#status", "");
+          renderDiscardNote();
+        } catch (err) {
+          setStatus("#status", err.message, "err");
+        }
+      };
+      buttons.append(button);
+    }
+
+    item.append(
+      // This page's own image route: ids belong to the duplicate index, and the
+      // same number is a different photo in the sorting one.
+      el("img", { src: `/api/dupes/thumbnail?id=${img.id}&size=420`, loading: "lazy" }),
+      el("div", { className: "dupe-meta" }, [
+        el("div", { className: "dupe-score",
+          textContent: img.id === group.keep ? `${img.similarity}% · best copy`
+                                             : `${img.similarity}% alike` }),
+        el("div", { textContent: img.filename }),
+        el("div", { className: "muted",
+          textContent: `${img.width || "?"}×${img.height || "?"} · ${formatBytes(img.size)}` }),
+        el("div", { className: "muted", textContent: img.taken_at || "no capture date" }),
+      ]),
+      buttons,
+    );
+    row.append(item);
+  }
+  card.append(row);
+
+  const bar = el("div", { className: "bar", style: "margin-top:10px" });
+  // The common case in one click: the highest-resolution copy is worth keeping
+  // and the rest are worth discarding — still only marks, still no file touched.
+  const suggest = el("button", { className: "primary", textContent: "Mark best, discard rest" });
+  suggest.onclick = async () => {
+    try {
+      const rest = group.images.map((i) => i.id).filter((id) => id !== group.keep);
+      await setMark([group.keep], "keep");
+      if (rest.length) await setMark(rest, "discard");
+      await loadGroups();
+    } catch (err) {
+      setStatus("#status", err.message, "err");
+    }
+  };
+  // The two whole-group verdicts the suggestion cannot express: every copy is
+  // worth having, or none of them is.
+  const all = (mark, label) => {
+    const button = el("button", { textContent: label });
+    button.onclick = async () => {
+      try {
+        await setMark(group.images.map((i) => i.id), mark);
+        await loadGroups();
+      } catch (err) {
+        setStatus("#status", err.message, "err");
+      }
+    };
+    return button;
+  };
+  const dismiss = el("button", { textContent: "Not duplicates" });
+  dismiss.onclick = async () => {
+    try {
+      await post("/api/duplicates/dismiss", { image_ids: group.images.map((i) => i.id) });
+      card.remove();
+    } catch (err) {
+      setStatus("#status", err.message, "err");
+    }
+  };
+  bar.append(suggest, all("keep", "Keep all"), all("discard", "Discard all"), dismiss);
+  card.append(el("p", { className: "muted", style: "margin:8px 0 0",
+    textContent: "Marks are notes to yourself — nothing is moved or deleted." }));
+  card.append(bar);
+  return card;
+}
+
+async function loadGroups() {
+  const data = await api(`/api/duplicates?distance=${$("#distance").value}`);
+  const container = $("#groups");
+  container.replaceChildren();
+  if (!data.groups.length) {
+    container.append(el("p", { className: "muted",
+      textContent: `no near-duplicates among ${CONFIG.indexed} images at this distance` }));
+    renderDiscardNote();
+    return;
+  }
+  data.groups.forEach((group, idx) => container.append(renderGroup(group, idx)));
+  renderDiscardNote();
+}
+
+// The threshold is in hash bits; the groups are labelled in percent. Showing
+// both against one control stops "max distance 10" and "84.4% alike" from
+// reading as two unrelated numbers.
+function renderDistanceNote() {
+  const bits = Math.min(64, Math.max(0, Number($("#distance").value) || 0));
+  const percent = ((64 - bits) * 100 / 64).toFixed(1);
+  $("#distance-note").textContent = `bits of 64 — groups at least ${percent}% alike`;
+}
+$("#distance").oninput = renderDistanceNote;
+
+$("#btn-find").onclick = async () => {
+  setStatus("#status", "grouping…");
+  try {
+    await loadGroups();
+    setStatus("#status", "");
+  } catch (err) {
+    setStatus("#status", err.message, "err");
+  }
+};
+
+/* -------------------------------------------------------------- discarding */
+
+const discardButtons = () => [$("#btn-discard"), $("#btn-discard-top")];
+const discardCount = () =>
+  document.querySelectorAll('.dupe-item[data-mark="discard"]').length;
+
+// Counted from what is on screen, so both buttons say how many photos they are
+// about to act on — and where those photos go — before either is pressed.
+function renderDiscardNote() {
+  const marked = discardCount();
+  const deleting = $("#direct-delete").checked;
+  for (const button of discardButtons()) button.disabled = marked === 0;
+  $("#btn-discard-top").textContent = marked
+    ? `Delete ${marked} duplicate${marked === 1 ? "" : "s"}`
+    : "Delete duplicates";
+  const photos = `${marked} photo${marked === 1 ? "" : "s"}`;
+  $("#discard-note").textContent = !marked ? "nothing marked Discard yet"
+    : deleting ? `sends ${photos} to the desktop trash — recoverable from there`
+               : `moves ${photos} into ${CONFIG.trash} — not deleted`;
+}
+
+$("#direct-delete").onchange = renderDiscardNote;
+
+async function runDiscard(reveal) {
+  const marked = discardCount();
+  const deleting = $("#direct-delete").checked;
+  // Reversible either way — but still the only button here that changes the
+  // folder, so it says what it will do and waits to be told twice.
+  if (!confirm(deleting
+        ? `Send ${marked} photo(s) to the desktop trash?\n\n`
+          + "Recoverable from the trash until you empty it."
+        : `Move ${marked} photo(s) into ${CONFIG.trash}?\n\n`
+          + "They are moved, not deleted — drag them back to undo.")) return;
+  for (const button of discardButtons()) button.disabled = true;
+  // Pressed from the header, the outcome would otherwise be reported into a
+  // card the reader has scrolled far past.
+  if (reveal) $("#discard-card").scrollIntoView({ behavior: "smooth", block: "center" });
+  setStatus("#discard-status", deleting ? "deleting…" : "moving…");
+  try {
+    const res = await post("/api/dupes/discard", { delete: deleting });
+    setStatus("#discard-status",
+      `${res.deleted ? "sent" : "moved"} ${res.count} to ${res.destination}`
+        + (res.errors ? ` · ${res.errors} failed` : ""),
+      res.errors ? "err" : "ok");
+    await loadConfig();
+    await loadGroups();
+  } catch (err) {
+    setStatus("#discard-status", err.message, "err");
+  } finally {
+    renderDiscardNote();
+  }
+}
+
+$("#btn-discard").onclick = () => runDiscard(false);
+$("#btn-discard-top").onclick = () => runDiscard(true);
+
+loadConfig().catch((err) => setStatus("#folder-status", err.message, "err"));
+</script>
+</body>
+</html>

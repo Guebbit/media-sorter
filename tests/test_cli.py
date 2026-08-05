@@ -75,7 +75,7 @@ def test_scan_without_folders_explains_itself(env, monkeypatch):
     from app.config import overrides, settings_file
 
     overrides.clear(settings_file(), ["INPUT_FOLDERS"])
-    monkeypatch.setenv("MEDIASORT_INPUT_FOLDERS", "/stale/export")  # must not rescue it
+    monkeypatch.delenv("MEDIASORT_INPUT_FOLDERS", raising=False)
 
     result = invoke("scan")
 

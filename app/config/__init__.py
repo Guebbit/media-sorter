@@ -12,11 +12,11 @@ from __future__ import annotations
 
 from . import dotenv, overrides
 from .env import load_settings, settings_file, source_of
-from .sections import (AnalyzeSettings, DetectSettings, LibrarySettings, OutputSettings, Paths,
-                       Settings, WebSettings, WorkerSettings)
+from .sections import (AnalyzeSettings, DetectSettings, DupesSettings, LibrarySettings,
+                       OutputSettings, Paths, Settings, WebSettings, WorkerSettings)
 
 __all__ = [
-    "AnalyzeSettings", "DetectSettings", "LibrarySettings", "OutputSettings", "Paths",
-    "Settings", "WebSettings", "WorkerSettings",
+    "AnalyzeSettings", "DetectSettings", "DupesSettings", "LibrarySettings", "OutputSettings",
+    "Paths", "Settings", "WebSettings", "WorkerSettings",
     "dotenv", "load_settings", "overrides", "settings_file", "source_of",
 ]

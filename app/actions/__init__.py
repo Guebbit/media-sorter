@@ -15,7 +15,7 @@ up without modification.
 from __future__ import annotations
 
 from .base import Action, ActionContext, ImageTarget, NameAllocator, PlannedAction
-from .builtin import CopyAction, DeleteAction, IgnoreAction, MoveAction
+from .builtin import CopyAction, DeleteAction, IgnoreAction, MoveAction, plan_delete
 from .executor import ApplyStats, apply_actions
 from .planner import plan_all
 from .registry import ActionRegistry, default_registry
@@ -23,5 +23,5 @@ from .registry import ActionRegistry, default_registry
 __all__ = [
     "Action", "ActionContext", "ActionRegistry", "ApplyStats", "DeleteAction", "IgnoreAction",
     "CopyAction", "ImageTarget", "MoveAction", "NameAllocator", "PlannedAction",
-    "apply_actions", "default_registry", "plan_all",
+    "apply_actions", "default_registry", "plan_all", "plan_delete",
 ]

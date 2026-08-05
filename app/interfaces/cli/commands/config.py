@@ -36,6 +36,11 @@ def set_(
     ),
     ollama_url: str = typer.Option(None, "--ollama-url", metavar="URL"),
     ollama_model: str = typer.Option(None, "--ollama-model", metavar="NAME"),
+    save_index: bool = typer.Option(
+        None, "--save-index/--no-save-index",
+        help="Keep what the detector learned, in a hidden folder inside the library, "
+             "so a second run on it does not start over. Off by default.",
+    ),
 ):
     """Save settings for every later command, and for the web UI.
 
@@ -49,11 +54,12 @@ def set_(
         "OUTPUT_FOLDER": output_folder,
         "OLLAMA_URL": ollama_url,
         "OLLAMA_MODEL": ollama_model,
+        "SAVE_INDEX": save_index,
     }
     given = {key: value for key, value in values.items() if value not in (None, [], ())}
     if not given:
         fail("nothing to set — pass at least one of --input, --output, "
-             "--ollama-url, --ollama-model")
+             "--ollama-url, --ollama-model, --save-index")
 
     run_or_fail(lambda: configuring.update(ctx, given))
 

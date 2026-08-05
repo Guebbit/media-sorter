@@ -8,11 +8,18 @@ readme = "README.md"
 # index (see the Makefile), not from PyPI's resolution of this list.
 dependencies = [
     "ultralytics>=8.3,<9",
+    # Video frame sampling (app/video.py) — ultralytics brings it too, but this
+    # code imports cv2 directly, so it says so.
+    "opencv-python>=4.10,<6",
     "pillow>=11,<13",
     "pillow-heif>=0.20,<2",
     "requests>=2.32,<3",
     "typer>=0.15,<1",
     "rich>=13.9,<16",
+    # Only the duplicates page's "delete straight to the desktop trash" needs
+    # it, and only when that box is ticked — imported at the call site, so a
+    # missing install is a message on that button, not a broken start-up.
+    "send2trash>=1.8,<2",
 ]
 
 [project.scripts]

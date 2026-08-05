@@ -7,6 +7,8 @@ claiming and failure handling can be tested without a GPU or a server.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from app.domain.adjudication import ABSENT, PRESENT, UNSURE, Adjudication
@@ -24,16 +26,25 @@ MAYBE_CAT = Detection("cat", 0.5, 0, 0, 10, 10)
 
 
 class FakeDetector:
-    """Returns the queued detections for every path; None means unreadable."""
+    """Returns the queued detections for every path; None means unreadable.
+
+    `in_video` is the same thing for `detect_video`, which the stage calls
+    instead of `detect_batch` for a video: None (the default) stands for a file
+    no frame could be read from, `[]` for frames that showed nothing.
+    """
 
     model_name = "fake.pt"
 
-    def __init__(self, per_path=None, unreadable=frozenset(), explode=False, default=None):
+    def __init__(self, per_path=None, unreadable=frozenset(), explode=False, default=None,
+                 in_video=None, video_explodes=False):
         self.per_path = per_path or {}
         self.unreadable = unreadable
         self.explode = explode
         self.default = [CAT] if default is None else default
+        self.in_video = in_video
+        self.video_explodes = video_explodes
         self.batches: list[list[str]] = []
+        self.videos: list[str] = []
         self.closed = False
 
     def detect_batch(self, paths):
@@ -45,6 +56,12 @@ class FakeDetector:
             else self.per_path.get(path, self.default)
             for path in paths
         }
+
+    def detect_video(self, path):
+        self.videos.append(path)
+        if self.video_explodes:
+            raise RuntimeError("ffmpeg is on fire")
+        return self.in_video
 
     def close(self):
         self.closed = True
@@ -135,55 +152,138 @@ def _insert_video(storage, path="/lib/clip.mp4"):
     extension, and nothing in the detect stage ever opens the path."""
     storage.images.upsert([{
         "path": path, "filename": path.rsplit("/", 1)[-1], "root": "/lib", "hash": "deadbeef",
-        "size": 100, "mtime": 0.0, "width": None, "height": None, "format": None, "taken_at": None,
+        "phash": None, "size": 100, "mtime": 0.0, "width": None, "height": None,
+        "format": None, "taken_at": None,
     }])
 
 
-def test_a_video_gets_a_synthetic_class_and_never_reaches_the_detector(indexed, cats):
+def _analyze_state(storage, path="/lib/clip.mp4"):
+    return storage.engine.conn.execute(
+        "SELECT analyze_state FROM images WHERE path = ?", (path,)
+    ).fetchone()["analyze_state"]
+
+
+def _stored_detections(storage, path="/lib/clip.mp4"):
+    """`{class: model}` for one file — what the detect stage wrote about it."""
+    rows = storage.engine.conn.execute(
+        "SELECT d.class, d.model FROM detections d JOIN images i ON i.id = d.image_id "
+        "WHERE i.path = ?",
+        (path,),
+    ).fetchall()
+    return {row["class"]: row["model"] for row in rows}
+
+
+def test_a_video_is_sorted_by_what_the_frames_showed(indexed, cats):
+    """The point of sampling frames: a video of a cat sorts as a cat, because
+    the cat rule sits above the video rule."""
     _insert_video(indexed.storage)
     ruleset = RuleSet.starter(["cat", "video"])
-    engine = FakeDetector()
+    engine = FakeDetector(in_video=[CAT])
 
     stats = run_detect_stage(
         indexed.storage, indexed.settings.detect, ruleset, lambda: engine, Stopper()
     )
 
     assert stats.processed == 6
-    assert stats.categories == {"cat": 5, "video": 1}
+    assert stats.categories == {"cat": 6}
+    assert engine.videos == ["/lib/clip.mp4"]
+    # A video is never part of an image batch: it takes the other route.
     assert all("/lib/clip.mp4" not in batch for batch in engine.batches)
-    # No vision model in this pipeline can look at a video either, so the
-    # semantic pass is already settled rather than left pending on the
-    # strength of the video rule's `move` action.
-    row = indexed.storage.engine.conn.execute(
-        "SELECT analyze_state FROM images WHERE path = ?", ("/lib/clip.mp4",)
-    ).fetchone()
-    assert row["analyze_state"] == SKIPPED
+    # Both classes are recorded — `video` is the fallback that did not have to
+    # be used, not something the cat replaces.
+    assert _stored_detections(indexed.storage) == {"cat": "fake.pt", "video": "fake.pt"}
 
 
-def test_an_all_video_batch_never_builds_the_detector(ctx):
-    """A library (or a batch) with no photos at all must not pay to load YOLO."""
+def test_a_video_the_frames_showed_nothing_in_falls_back_to_the_video_rule(indexed, cats):
+    _insert_video(indexed.storage)
+    ruleset = RuleSet.starter(["cat", "video"])
+    engine = FakeDetector(in_video=[])
+
+    stats = run_detect_stage(
+        indexed.storage, indexed.settings.detect, ruleset, lambda: engine, Stopper()
+    )
+
+    assert stats.categories == {"cat": 5, "video": 1}
+    # Frames were read, so the model that read them is what gets recorded.
+    assert _stored_detections(indexed.storage) == {"video": "fake.pt"}
+
+
+def test_an_unreadable_video_is_sorted_by_extension_rather_than_failed(indexed, cats):
+    """A container nothing can open is still a video — the one thing known
+    about it stays true, so it sorts on that instead of erroring."""
+    _insert_video(indexed.storage)
+    ruleset = RuleSet.starter(["cat", "video"])
+
+    stats = run_detect_stage(
+        indexed.storage, indexed.settings.detect, ruleset,
+        lambda: FakeDetector(in_video=None), Stopper(),
+    )
+
+    assert stats.errors == 0
+    assert stats.categories == {"cat": 5, "video": 1}
+    assert _stored_detections(indexed.storage) == {"video": "file-extension"}
+    # Nothing looked inside, so the semantic pass has nothing to describe.
+    assert _analyze_state(indexed.storage) == SKIPPED
+
+
+def test_a_video_that_breaks_the_detector_still_gets_its_pseudo_class(indexed, cats):
+    _insert_video(indexed.storage)
+    ruleset = RuleSet.starter(["cat", "video"])
+
+    stats = run_detect_stage(
+        indexed.storage, indexed.settings.detect, ruleset,
+        lambda: FakeDetector(video_explodes=True), Stopper(),
+    )
+
+    assert stats.errors == 0
+    assert stats.categories == {"cat": 5, "video": 1}
+
+
+def test_no_frames_configured_means_no_video_is_ever_opened(ctx):
+    """`DETECT_VIDEO_FRAMES=0` goes back to sorting videos by extension alone —
+    and a library of nothing but videos then never pays to load YOLO."""
     _insert_video(ctx.storage)
     ruleset = RuleSet.starter(["cat", "video"])
 
     def factory():
-        raise AssertionError("the detector should never be built for an all-video batch")
+        raise AssertionError("nothing should be loaded when no frame will be read")
 
-    stats = run_detect_stage(ctx.storage, ctx.settings.detect, ruleset, factory, Stopper())
+    stats = run_detect_stage(
+        ctx.storage, replace(ctx.settings.detect, video_frames=0), ruleset, factory, Stopper()
+    )
     assert stats.processed == 1
     assert stats.categories == {"video": 1}
+    assert _analyze_state(ctx.storage) == SKIPPED
 
 
-def test_analyze_never_sees_a_video(indexed, cats):
-    """A video's action is `move`, not `ignore` — the ordinary ignore-skip
-    would not catch it, so this checks the video-specific skip instead."""
+def test_analyze_describes_a_video_it_could_read_frames_from(indexed, cats):
+    """Ollama gets a frame like any photo (`imaging.to_jpeg_bytes`), so a video
+    the detector could see into is describable too."""
+    _insert_video(indexed.storage)
+    ruleset = RuleSet.starter(["cat", "video"])
+    run_detect_stage(
+        indexed.storage, indexed.settings.detect, ruleset,
+        lambda: FakeDetector(in_video=[CAT]), Stopper(),
+    )
+
+    engine = FakeVision()
+    stats = run_analyze_stage(
+        indexed.storage, ruleset, indexed.settings.workers, lambda: engine, Stopper(),
+    )
+    assert stats.processed == 6
+    assert "/lib/clip.mp4" in [path for path, _ in engine.seen]
+
+
+def test_analyze_never_sees_a_video_nothing_looked_inside(indexed, cats):
+    """The other way round: no frame, nothing to describe. A video's action is
+    `move`, not `ignore`, so the ordinary ignore-skip would not catch it."""
     _insert_video(indexed.storage)
     ruleset = RuleSet.starter(["cat", "video"])
     run_detect_stage(indexed.storage, indexed.settings.detect, ruleset, FakeDetector, Stopper())
 
     engine = FakeVision()
     stats = run_analyze_stage(
-        indexed.storage, indexed.settings.analyze, ruleset,
-        indexed.settings.workers, lambda: engine, Stopper(),
+        indexed.storage, ruleset, indexed.settings.workers, lambda: engine, Stopper(),
     )
     assert stats.processed == 5
     assert all(path != "/lib/clip.mp4" for path, _ in engine.seen)
@@ -205,8 +305,7 @@ def test_analysis_only_sees_images_the_rules_kept(indexed, cats):
 
     engine = FakeVision()
     stats = run_analyze_stage(
-        indexed.storage, indexed.settings.analyze, cats,
-        indexed.settings.workers, lambda: engine, Stopper(),
+        indexed.storage, cats, indexed.settings.workers, lambda: engine, Stopper(),
     )
     assert stats.processed == 2
     assert len(engine.seen) == 2
@@ -216,8 +315,7 @@ def test_the_detector_result_is_passed_to_the_vision_engine_as_a_hint(indexed, c
     _detect_all(indexed, cats)
     engine = FakeVision()
     run_analyze_stage(
-        indexed.storage, indexed.settings.analyze, cats,
-        indexed.settings.workers, lambda: engine, Stopper(),
+        indexed.storage, cats, indexed.settings.workers, lambda: engine, Stopper(),
     )
     assert all(hint == "cat (95%)" for _, hint in engine.seen)
 
@@ -225,9 +323,8 @@ def test_the_detector_result_is_passed_to_the_vision_engine_as_a_hint(indexed, c
 def test_a_refusing_engine_records_an_error_per_image(indexed, cats):
     _detect_all(indexed, cats)
     stats = run_analyze_stage(
-        indexed.storage, indexed.settings.analyze, cats,
-        indexed.settings.workers, lambda: FakeVision(fail_on={".jpg", ".png", ".jpeg", ".webp"}),
-        Stopper(),
+        indexed.storage, cats, indexed.settings.workers,
+        lambda: FakeVision(fail_on={".jpg", ".png", ".jpeg", ".webp"}), Stopper(),
     )
     assert stats.processed == 0
     assert stats.errors == 5
