@@ -9,9 +9,14 @@ MEDIASORT     := $(BIN)/mediasort
 # Not cu124: that index has no wheels for Python 3.13+.
 TORCH_VARIANT ?= cu128
 TORCH_INDEX   := https://download.pytorch.org/whl/$(TORCH_VARIANT)
+# What `make seed` puts in a rules file that does not exist yet. Override to
+# start from your own classes: make seed DEMO_CLASSES=cat,bird,video
+DEMO_CLASSES  ?= person,cat,dog,video
+# Where `make link` puts the symlink. The usual per-user bin folder.
+BINDIR        ?= $(HOME)/.local/bin
 
-.PHONY: help install install-cpu uninstall freeze doctor config scan detect analyze run web rules \
-        preview recheck test apply stats verify export clean-links reset
+.PHONY: help install install-cpu seed link unlink uninstall freeze doctor config scan detect \
+        analyze run web rules preview recheck test apply stats verify export clean-links reset
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-12s\033[0m %s\n", $$1, $$2}'
@@ -25,14 +30,42 @@ install: $(BIN)/pip  ## Create .venv and install everything (downloads torch, ~2
 	$(BIN)/pip install --index-url $(TORCH_INDEX) torch torchvision
 	$(BIN)/pip install -r requirements.txt -r requirements-dev.txt
 	$(BIN)/pip install --no-deps -e .
+	@$(MAKE) --no-print-directory seed
 	@echo
-	@echo "installed. next: $(MEDIASORT) config set --input /path/to/photos && make doctor"
+	@echo "installed. next:"
+	@echo "  $(MEDIASORT) config set --input /path/to/photos   # the one thing it cannot guess"
+	@echo "  make doctor                    # GPU, weights, Ollama, rules, paths"
+	@echo "  make web                       # rules editor on 127.0.0.1:8765"
+	@echo
+	@echo "the commands above are wrappers around $(MEDIASORT). To type"
+	@echo "\`mediasort\` yourself: \`source $(BIN)/activate\`, or \`make link\` once."
 
 install-cpu:  ## Same, without CUDA (much smaller download)
 	$(MAKE) install TORCH_VARIANT=cpu
 
+seed:       ## Write a starter ruleset if there is none yet (safe to re-run)
+	@$(MEDIASORT) rules init --classes $(DEMO_CLASSES) \
+		|| echo "keeping the rules already on disk — nothing was changed"
+
+link:       ## Put `mediasort` on your PATH: a symlink in ~/.local/bin (BINDIR=)
+	@mkdir -p $(BINDIR)
+	@ln -sfn $(CURDIR)/$(MEDIASORT) $(BINDIR)/mediasort
+	@echo "linked $(BINDIR)/mediasort -> $(CURDIR)/$(MEDIASORT)"
+	@case ":$$PATH:" in \
+		*":$(BINDIR):"*) echo "run \`mediasort --help\` from anywhere." ;; \
+		*) echo "note: $(BINDIR) is not on your PATH. Add it to ~/.zshrc:" ; \
+		   echo "  export PATH=\"$(BINDIR):\$$PATH\"" ;; \
+	esac
+	@echo "the link points into this folder: move or rename it and re-run \`make link\`."
+
+unlink:     ## Remove that symlink again
+	@if [ -L $(BINDIR)/mediasort ]; then rm $(BINDIR)/mediasort; \
+		echo "removed $(BINDIR)/mediasort"; \
+	else echo "nothing to remove: no symlink at $(BINDIR)/mediasort"; fi
+
 uninstall:  ## Delete the virtualenv. Photos, index and rules are untouched.
 	rm -rf $(VENV)
+	@echo "if you ran \`make link\`, \`make unlink\` removes the dangling symlink."
 
 freeze:  ## Record the exact versions currently installed
 	$(BIN)/pip freeze > requirements.lock.txt

@@ -49,12 +49,17 @@ make install          # creates .venv, downloads torch (~2.5 GB) — once
 source .venv/bin/activate
 
 mediasort config set --input ~/Pictures   # the one thing it cannot guess
-mediasort rules init --classes cat,dog,video   # nothing else seeds this for you
 mediasort doctor      # check GPU, weights, Ollama, rules, paths
 mediasort run         # scan -> detect -> analyze -> apply the rules
 ```
 
 `make install-cpu` instead of `make install` if you have no NVIDIA GPU.
+
+`make install` also seeds a starter ruleset — `person,cat,dog,video` — so
+`make web` and `make run` have something to work with on a fresh clone. It only
+writes the file when there is none, so re-running it never touches rules you
+have edited. `make seed DEMO_CLASSES=cat,bird,video` starts from your own
+classes instead, and the editor changes them at any point.
 
 The folders are the one setting you have to give, and there are three ways to:
 `mediasort config set` as above, the Settings tab in the web UI, or `--input` /
@@ -87,6 +92,17 @@ is yours directly:
 source .venv/bin/activate
 mediasort run
 ```
+
+`mediasort` lives in `.venv/bin/`, so it is on your PATH only while that
+virtualenv is active. To have it everywhere without activating:
+
+```bash
+make link             # symlinks .venv/bin/mediasort into ~/.local/bin
+make unlink           # removes it again
+```
+
+`make link` warns if `~/.local/bin` is not on your PATH, and takes `BINDIR=` for
+somewhere else. The symlink points into this folder — see below.
 
 ### If you move or rename the project folder
 
@@ -130,6 +146,9 @@ replaces a symlink with a regular file rather than editing through it, which
 breaks the virtualenv in a new and less obvious way. `grep -Il` skips binaries
 for the same reason. Around 30 files need it — the `bin/` scripts, `pyvenv.cfg`,
 and the editable install's `__editable___*_finder.py` and `direct_url.json`.
+
+Either way, re-run `make link` afterwards if you had one: the symlink names the
+old path too.
 
 Check it worked before trusting it:
 
@@ -283,9 +302,10 @@ A rule has a **name**, a **condition** and an **action**. They are evaluated top
 to bottom and **the first match wins**, so the most specific rule goes first and
 the last one should match anything.
 
-The file lives at `MEDIASORT_RULES` (`./data/rules.json`). Nothing creates it for
-you — run `mediasort rules init --classes cat,dog,video` once, which writes one
-combined rule, one per class, one catch-all:
+The file lives at `MEDIASORT_RULES` (`./data/rules.json`). `make install` seeds
+one for you (via `make seed`); `mediasort rules init --classes cat,dog,video`
+writes one from your own classes at any time — one combined rule, one per class,
+one catch-all:
 
 ```jsonc
 {

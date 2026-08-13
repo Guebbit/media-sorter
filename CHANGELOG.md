@@ -10,6 +10,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`make install` seeds a starter ruleset** (`person,cat,dog,video`), so
+  `make web` and `make run` work on a fresh clone instead of failing with
+  "data/rules.json does not exist yet". Its own target, `make seed`, which only
+  writes when no rules file exists — re-running it never touches edited rules —
+  and takes `DEMO_CLASSES=` to start from other classes.
+- **`make link` / `make unlink`**: `mediasort` is installed into `.venv/bin`,
+  so it is on your PATH only while the virtualenv is active. `make link`
+  symlinks it into `~/.local/bin` (`BINDIR=` for elsewhere) and says so if that
+  folder is not on your PATH. The link names this folder, so it needs re-running
+  after a move — same caveat as the virtualenv itself.
+
 - **Videos are sorted by what is in them.** YOLO runs on
   `MEDIASORT_DETECT_VIDEO_FRAMES` stills (8 by default) sampled across each
   file, so a clip of your cat lands in `Cat/` next to the photos of it. The
